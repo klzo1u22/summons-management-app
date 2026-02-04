@@ -119,6 +119,7 @@ export async function syncSummons(): Promise<SyncResult> {
                     rescheduled_date_communicated: rescheduledDateCommunicated ? 1 : 0,
                     followup_required: followupRequired ? 1 : 0,
                     previous_summon_id: getRelation('Previous Summon') || getRelation('Previous Summons') || '',
+                    served_date: getDate('Served Date'),
                     created_at: page.created_time,
                     synced_at: new Date().toISOString()
                 };
@@ -183,6 +184,7 @@ export async function syncSummons(): Promise<SyncResult> {
                         date_of_3rd_statement = :date_of_3rd_statement, 
                         rescheduled_date_communicated = :rescheduled_date_communicated, 
                         followup_required = :followup_required, 
+                        served_date = :served_date,
                         previous_summon_id = :previous_summon_id, synced_at = :synced_at
                     WHERE id = :id
                 `,
