@@ -12,12 +12,17 @@ const db = createClient({
   authToken: authToken,
 });
 
+
+let isInitialized = false;
+
 /**
  * Initialize the database schema.
  * This should be called once on server startup or during deployment.
  * For Turso, you can also run these commands manually in their shell.
  */
 export async function initDatabase() {
+  if (isInitialized) return;
+
   try {
     await db.execute(`
             CREATE TABLE IF NOT EXISTS summons (
@@ -144,6 +149,7 @@ export async function initDatabase() {
       await db.execute('ALTER TABLE users ADD COLUMN status TEXT DEFAULT "pending"');
     } catch (e) { /* ignore if already exists */ }
 
+    isInitialized = true;
   } catch (error) {
     console.error('Database initialization error:', error);
   }

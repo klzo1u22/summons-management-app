@@ -1,5 +1,6 @@
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import './main.css';
+import { initDatabase } from '@/lib/db';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -25,11 +26,13 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  await initDatabase();
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
