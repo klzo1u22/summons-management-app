@@ -55,7 +55,7 @@ export async function syncCases(): Promise<SyncResult> {
             const props = (page as any).properties;
 
             try {
-                const getTitle = (key: string) => props[key]?.title?.[0]?.plain_text || 'Unknown Case';
+                const getTitle = (key: string) => props[key]?.title?.[0]?.plain_text;
                 const getText = (key: string) => props[key]?.rich_text?.[0]?.plain_text || '';
                 const getDate = (key: string) => props[key]?.date?.start || null;
                 const getSelect = (key: string) => props[key]?.select?.name || null;
@@ -64,7 +64,7 @@ export async function syncCases(): Promise<SyncResult> {
 
                 const caseParams = {
                     id: id,
-                    name: getTitle('Case Name') || getTitle('Name'),
+                    name: getTitle('Case Name') || getTitle('Name') || 'Unknown Case',
                     ecir_no: getText('ECIR No') || getText('ECIR Number'),
                     date_of_ecir: getDate('Date of ECIR'),
                     status: getSelect('Status'),

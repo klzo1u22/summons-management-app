@@ -58,12 +58,18 @@ export async function archiveInNotion(id: string) {
 }
 
 export async function pushCase(id: string): Promise<{ newId?: string } | void> {
-    const rs = await db.execute({
-        sql: 'SELECT * FROM cases WHERE id = ?',
-        args: [id]
-    });
-    const row = rs.rows[0] as any;
-    if (!row) throw new Error(`Case ${id} not found locally.`);
+    let row;
+    for (let i = 0; i < 3; i++) {
+        const rs = await db.execute({
+            sql: 'SELECT * FROM cases WHERE id = ?',
+            args: [id]
+        });
+        row = rs.rows[0] as any;
+        if (row) break;
+        await new Promise(r => setTimeout(r, 500 * (i + 1)));
+    }
+
+    if (!row) throw new Error(`Case ${id} not found locally after retries.`);
 
     const assignedOfficer = JSON.parse(row.assigned_officer || '[]');
     const activity = JSON.parse(row.activity || '[]');
@@ -143,12 +149,18 @@ export async function pushCase(id: string): Promise<{ newId?: string } | void> {
 }
 
 export async function pushSummons(id: string): Promise<{ newId?: string } | void> {
-    const rs = await db.execute({
-        sql: 'SELECT * FROM summons WHERE id = ?',
-        args: [id]
-    });
-    const row = rs.rows[0] as any;
-    if (!row) throw new Error(`Summons ${id} not found locally.`);
+    let row;
+    for (let i = 0; i < 3; i++) {
+        const rs = await db.execute({
+            sql: 'SELECT * FROM summons WHERE id = ?',
+            args: [id]
+        });
+        row = rs.rows[0] as any;
+        if (row) break;
+        await new Promise(r => setTimeout(r, 500 * (i + 1))); // Wait 500ms, 1000ms
+    }
+
+    if (!row) throw new Error(`Summons ${id} not found locally after retries.`);
 
     const modeOfService = JSON.parse(row.mode_of_service || '[]');
     const purpose = JSON.parse(row.purpose || '[]');
@@ -200,10 +212,25 @@ export async function pushSummons(id: string): Promise<{ newId?: string } | void
         await notion.pages.update({ page_id: id, properties });
     } catch (e: any) {
         if (e.code === 'object_not_found' || e.status === 400 || e.status === 404) {
-            const response = await notion.pages.create({
-                parent: { database_id: SUMMONS_DATABASE_ID },
-                properties
-            });
+            let response;
+            try {
+                response = await notion.pages.create({
+                    parent: { database_id: SUMMONS_DATABASE_ID },
+                    properties
+                });
+            } catch (createError: any) {
+                // If creation failed potentially due to invalid relation (e.g. case not synced yet), try without relation
+                if (properties['Case '] || properties['Previous Summon']) {
+                    console.warn(`Failed to create Summons with relations, retrying without relations. Error: ${createError.message}`);
+                    const { 'Case ': _, 'Previous Summon': __, ...propsWithoutRelations } = properties;
+                    response = await notion.pages.create({
+                        parent: { database_id: SUMMONS_DATABASE_ID },
+                        properties: propsWithoutRelations
+                    });
+                } else {
+                    throw createError;
+                }
+            }
 
             const newId = response.id;
             console.log(`Created new Summons in Notion. Updating local ID from ${id} to ${newId}`);

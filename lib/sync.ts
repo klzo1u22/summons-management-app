@@ -50,7 +50,7 @@ export async function syncSummons(): Promise<SyncResult> {
             const props = (page as any).properties;
 
             try {
-                const getTitle = (key: string) => props[key]?.title?.[0]?.plain_text || 'Unknown Name';
+                const getTitle = (key: string) => props[key]?.title?.[0]?.plain_text;
                 const getText = (key: string) => props[key]?.rich_text?.[0]?.plain_text || '';
                 const getDate = (key: string) => props[key]?.date?.start || null;
                 const getSelect = (key: string) => props[key]?.select?.name || null;
@@ -92,7 +92,7 @@ export async function syncSummons(): Promise<SyncResult> {
                 const summonsParams = {
                     id: id,
                     case_id: props['Case ']?.relation?.[0]?.id || props['Case']?.relation?.[0]?.id || 'Pending Link',
-                    person_name: getTitle('Name of Person') || getTitle('Name'),
+                    person_name: getTitle('Name of Person') || getTitle('Name') || 'Unknown Name',
                     person_role: getSelect('Person Role') || 'Witness',
                     contact_number: getPhone('Contact Number') || getPhone('Phone') || getText('Contact'),
                     email: getEmail('Email') || null,
