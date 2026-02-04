@@ -83,7 +83,9 @@ export async function syncCases(): Promise<SyncResult> {
                 };
 
                 if (existingIds.has(id)) {
-                    toUpdate.push(caseParams);
+                    // Strict subset for UPDATE (16 params)
+                    const { created_at, ...updateParams } = caseParams;
+                    toUpdate.push(updateParams);
                     updatedCount++;
                 } else {
                     toInsert.push(caseParams);

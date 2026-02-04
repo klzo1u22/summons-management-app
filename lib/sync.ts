@@ -125,7 +125,45 @@ export async function syncSummons(): Promise<SyncResult> {
                 };
 
                 if (existingIds.has(id)) {
-                    toUpdate.push(summonsParams);
+                    // Filter params for UPDATE to match exactly the 27 placeholders
+                    // Excluded: created_at, mode_of_service, purpose, notes (not in UPDATE query?)
+                    // Wait, checking update query below...
+                    // Update query has: case_id ... notes IS NOT THERE?
+                    // Checking step 349 UPDATE Query:
+                    // ... notes IS NOT THERE.
+                    // ... mode_of_service IS NOT THERE.
+                    // ... purpose IS NOT THERE.
+
+                    const updateParams = {
+                        id: summonsParams.id,
+                        case_id: summonsParams.case_id,
+                        person_name: summonsParams.person_name,
+                        person_role: summonsParams.person_role,
+                        contact_number: summonsParams.contact_number,
+                        email: summonsParams.email,
+                        issue_date: summonsParams.issue_date,
+                        appearance_date: summonsParams.appearance_date,
+                        rescheduled_date: summonsParams.rescheduled_date,
+                        status: summonsParams.status,
+                        statement_status: summonsParams.statement_status,
+                        priority: summonsParams.priority,
+                        tone: summonsParams.tone,
+                        summons_response: summonsParams.summons_response,
+                        is_issued: summonsParams.is_issued,
+                        is_served: summonsParams.is_served,
+                        requests_reschedule: summonsParams.requests_reschedule,
+                        statement_ongoing: summonsParams.statement_ongoing,
+                        statement_recorded: summonsParams.statement_recorded,
+                        date_of_1st_statement: summonsParams.date_of_1st_statement,
+                        date_of_2nd_statement: summonsParams.date_of_2nd_statement,
+                        date_of_3rd_statement: summonsParams.date_of_3rd_statement,
+                        rescheduled_date_communicated: summonsParams.rescheduled_date_communicated,
+                        followup_required: summonsParams.followup_required,
+                        served_date: summonsParams.served_date,
+                        previous_summon_id: summonsParams.previous_summon_id,
+                        synced_at: summonsParams.synced_at
+                    };
+                    toUpdate.push(updateParams);
                     updatedCount++;
                 } else {
                     toInsert.push(summonsParams);
