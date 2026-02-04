@@ -1,8 +1,9 @@
+
 'use server';
 
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { db } from '@/lib/firebase-admin';
+import db from '@/lib/db';
 import { hashPassword, comparePassword, encrypt, AuthUser } from '@/lib/auth';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -17,8 +18,11 @@ export async function signupAction(formData: FormData) {
     }
 
     // Check if user exists
-    const userQuery = await db.collection('users').where('email', '==', email).limit(1).get();
-    if (!userQuery.empty) {
+    const existingUserRs = await db.execute({
+        sql: 'SELECT id FROM users WHERE email = ?',
+        args: [email]
+    });
+    if (existingUserRs.rows[0]) {
         return { error: 'Email already registered' };
     }
 
@@ -27,21 +31,18 @@ export async function signupAction(formData: FormData) {
     const createdAt = new Date().toISOString();
 
     // Check if this is the first user - they will be the admin
-    const allUsersSnap = await db.collection('users').count().get();
-    const userCount = allUsersSnap.data().count;
+    const userCountRs = await db.execute('SELECT COUNT(*) as count FROM users');
+    const userCount = Number(userCountRs.rows[0]?.count || 0);
     const role = userCount === 0 ? 'admin' : 'user';
     const status = userCount === 0 ? 'active' : 'pending';
 
     try {
-        await db.collection('users').doc(id).set({
-            id,
-            email,
-            password_hash: passwordHash,
-            first_name: firstName,
-            last_name: lastName,
-            role,
-            status,
-            created_at: createdAt
+        await db.execute({
+            sql: `
+                INSERT INTO users (id, email, password_hash, first_name, last_name, role, status, created_at)
+                VALUES (:id, :email, :passwordHash, :firstName, :lastName, :role, :status, :createdAt)
+            `,
+            args: { id, email, passwordHash, firstName, lastName, role, status, createdAt }
         });
 
         if (status === 'pending') {
@@ -70,13 +71,15 @@ export async function loginAction(formData: FormData) {
         return { error: 'Email and password are required' };
     }
 
-    const userQuery = await db.collection('users').where('email', '==', email).limit(1).get();
+    const rs = await db.execute({
+        sql: 'SELECT * FROM users WHERE email = ?',
+        args: [email]
+    });
+    const userRecord = rs.rows[0] as any;
 
-    if (userQuery.empty) {
+    if (!userRecord) {
         return { error: 'Invalid email or password' };
     }
-
-    const userRecord = userQuery.docs[0].data();
 
     if (!(await comparePassword(password, userRecord.password_hash))) {
         return { error: 'Invalid email or password' };
@@ -91,12 +94,12 @@ export async function loginAction(formData: FormData) {
     }
 
     const user: AuthUser = {
-        id: userRecord.id, // Firestore doc ID is same as 'id' field usually, but best to use field if set
+        id: userRecord.id,
         email: userRecord.email,
         firstName: userRecord.first_name,
         lastName: userRecord.last_name,
-        role: userRecord.role,
-        status: userRecord.status
+        role: userRecord.role as any,
+        status: userRecord.status as any
     };
 
     const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -113,7 +116,8 @@ export async function logoutAction() {
 }
 
 export async function getAuthUser(): Promise<AuthUser | null> {
-    const session = (await cookies()).get('session')?.value;
+    const sessionCookie = (await cookies()).get('session');
+    const session = sessionCookie?.value;
     if (!session) return null;
 
     try {
@@ -132,19 +136,17 @@ export async function getAllUsers() {
         throw new Error('Unauthorized');
     }
 
-    const snapshot = await db.collection('users').orderBy('created_at', 'desc').get();
-    return snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-            id: data.id,
-            email: data.email,
-            firstName: data.first_name,
-            lastName: data.last_name,
-            role: data.role,
-            status: data.status,
-            createdAt: data.created_at
-        };
-    });
+    const rs = await db.execute('SELECT * FROM users ORDER BY created_at DESC');
+    const rows = rs.rows as any[];
+    return rows.map(row => ({
+        id: row.id,
+        email: row.email,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        role: row.role,
+        status: row.status,
+        createdAt: row.created_at
+    }));
 }
 
 export async function updateUserStatus(userId: string, status: 'active' | 'pending' | 'disabled') {
@@ -153,7 +155,10 @@ export async function updateUserStatus(userId: string, status: 'active' | 'pendi
         throw new Error('Unauthorized');
     }
 
-    await db.collection('users').doc(userId).update({ status });
+    await db.execute({
+        sql: 'UPDATE users SET status = ? WHERE id = ?',
+        args: [status, userId]
+    });
     return { success: true };
 }
 
@@ -163,7 +168,10 @@ export async function updateUserRole(userId: string, role: 'admin' | 'user') {
         throw new Error('Unauthorized');
     }
 
-    await db.collection('users').doc(userId).update({ role });
+    await db.execute({
+        sql: 'UPDATE users SET role = ? WHERE id = ?',
+        args: [role, userId]
+    });
     return { success: true };
 }
 
@@ -178,6 +186,9 @@ export async function deleteUser(userId: string) {
         return { error: 'You cannot delete your own account' };
     }
 
-    await db.collection('users').doc(userId).delete();
+    await db.execute({
+        sql: 'DELETE FROM users WHERE id = ?',
+        args: [userId]
+    });
     return { success: true };
 }

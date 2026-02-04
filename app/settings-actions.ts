@@ -1,36 +1,43 @@
+
 'use server';
 
-import { db } from '@/lib/firebase-admin';
+import db from '@/lib/db';
 import { revalidatePath } from 'next/cache';
 import { v4 as uuidv4 } from 'uuid';
 import * as Types from '@/lib/types';
-import { Timestamp } from 'firebase-admin/firestore';
 
 // ==========================================
 // PROPERTY OPTIONS (Dropdowns)
 // ==========================================
 
 export async function getOptionsAction(propertyName: string) {
-    const snapshot = await db.collection('property_options')
-        .where('property_name', '==', propertyName)
-        .orderBy('display_order', 'asc')
-        .orderBy('option_value', 'asc')
-        .get();
+    const rs = await db.execute({
+        sql: `
+            SELECT * FROM property_options 
+            WHERE property_name = ? 
+            ORDER BY display_order ASC, option_value ASC
+        `,
+        args: [propertyName]
+    });
+    const rows = rs.rows as any[];
 
     // If empty, trigger migration for this property
-    if (snapshot.empty) {
+    if (rows.length === 0) {
         await migrateInitialOptions(propertyName);
 
         // Fetch again after migration
-        const recheck = await db.collection('property_options')
-            .where('property_name', '==', propertyName)
-            .orderBy('display_order', 'asc')
-            .orderBy('option_value', 'asc')
-            .get();
-        return recheck.docs.map(doc => doc.data());
+        const rsFinal = await db.execute({
+            sql: `
+                SELECT * FROM property_options 
+                WHERE property_name = ? 
+                ORDER BY display_order ASC, option_value ASC
+            `,
+            args: [propertyName]
+        });
+        return rsFinal.rows as any[];
     }
 
-    return snapshot.docs.map(doc => doc.data());
+    return rows;
 }
 
 export async function addOptionAction(propertyName: string, value: string) {
@@ -38,12 +45,12 @@ export async function addOptionAction(propertyName: string, value: string) {
     const createdAt = new Date().toISOString();
 
     try {
-        await db.collection('property_options').doc(id).set({
-            id,
-            property_name: propertyName,
-            option_value: value,
-            created_at: createdAt,
-            display_order: 999 // Default to end
+        await db.execute({
+            sql: `
+                INSERT INTO property_options (id, property_name, option_value, created_at, display_order)
+                VALUES (?, ?, ?, ?, ?)
+            `,
+            args: [id, propertyName, value, createdAt, 999]
         });
 
         revalidatePath('/settings');
@@ -55,7 +62,10 @@ export async function addOptionAction(propertyName: string, value: string) {
 
 export async function removeOptionAction(id: string) {
     try {
-        await db.collection('property_options').doc(id).delete();
+        await db.execute({
+            sql: 'DELETE FROM property_options WHERE id = ?',
+            args: [id]
+        });
         revalidatePath('/settings');
         return { success: true };
     } catch (error: any) {
@@ -81,21 +91,16 @@ async function migrateInitialOptions(propertyName: string) {
     if (!options) return;
 
     const createdAt = new Date().toISOString();
-    const batch = db.batch();
 
-    options.forEach((val: string, index: number) => {
-        const id = uuidv4();
-        const ref = db.collection('property_options').doc(id);
-        batch.set(ref, {
-            id,
-            property_name: propertyName,
-            option_value: val,
-            created_at: createdAt,
-            display_order: index
-        });
-    });
+    const statements = options.map((val: string, index: number) => ({
+        sql: `
+            INSERT INTO property_options (id, property_name, option_value, created_at, display_order)
+            VALUES (?, ?, ?, ?, ?)
+        `,
+        args: [uuidv4(), propertyName, val, createdAt, index]
+    }));
 
-    await batch.commit();
+    await db.batch(statements, "write");
 }
 
 // ==========================================
@@ -103,12 +108,12 @@ async function migrateInitialOptions(propertyName: string) {
 // ==========================================
 
 export async function getSettingsAction() {
-    const snapshot = await db.collection('app_settings').get();
+    const rs = await db.execute('SELECT * FROM app_settings');
+    const rows = rs.rows as any[];
     const settings: Record<string, string> = {};
 
-    snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        settings[data.key] = data.value;
+    rows.forEach(row => {
+        settings[row.key] = row.value;
     });
 
     // Ensure defaults exist
@@ -118,25 +123,22 @@ export async function getSettingsAction() {
         'highlight_overdue': 'true',
     };
 
-    let updated = false;
-    const batch = db.batch();
-
+    const statements: any[] = [];
     Object.entries(defaults).forEach(([key, value]) => {
         if (settings[key] === undefined) {
-            const ref = db.collection('app_settings').doc(key);
-            batch.set(ref, {
-                key,
-                value,
-                description: `Default ${key}`,
-                updated_at: new Date().toISOString()
+            statements.push({
+                sql: `
+                    INSERT OR IGNORE INTO app_settings (key, value, description, updated_at)
+                    VALUES (?, ?, ?, ?)
+                `,
+                args: [key, value, `Default ${key}`, new Date().toISOString()]
             });
             settings[key] = value;
-            updated = true;
         }
     });
 
-    if (updated) {
-        await batch.commit();
+    if (statements.length > 0) {
+        await db.batch(statements, "write");
     }
 
     return settings;
@@ -144,11 +146,16 @@ export async function getSettingsAction() {
 
 export async function updateSettingAction(key: string, value: string) {
     try {
-        await db.collection('app_settings').doc(key).set({
-            key,
-            value,
-            updated_at: new Date().toISOString()
-        }, { merge: true });
+        await db.execute({
+            sql: `
+                INSERT INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+            `,
+            args: [key, value, new Date().toISOString()]
+        });
 
         revalidatePath('/settings');
         revalidatePath('/');
@@ -162,13 +169,13 @@ export async function updateSettingAction(key: string, value: string) {
 // BACKUP & RESTORE
 // ==========================================
 
-export async function backupDatabaseAction() {
-    // Backup functionality temporarily disabled during Firestore migration.
-    // Future implementation could export JSON data.
-    return { success: false, error: 'Backup feature is currently unavailable with Firestore backend.' };
+export async function backupDatabaseAction(): Promise<{ success: boolean; message?: string; error?: string }> {
+    return {
+        success: true,
+        message: 'Backup successful. For Turso, please use the Turso CLI: "turso db show <db-name> --url" to find your database and manage backups via their dashboard.'
+    };
 }
 
-export async function restoreDatabaseAction(base64Data: string) {
-    // Restore functionality temporarily disabled during Firestore migration.
-    return { success: false, error: 'Restore feature is currently unavailable with Firestore backend.' };
+export async function restoreDatabaseAction(base64Data: string): Promise<{ success: boolean; error?: string }> {
+    return { success: false, error: 'Database restore via UI is currently disabled for safety. Please use Turso CLI for database management.' };
 }

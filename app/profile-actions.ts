@@ -1,6 +1,7 @@
+
 'use server';
 
-import { db } from '@/lib/firebase-admin';
+import db from '@/lib/db';
 import { hashPassword, comparePassword } from '@/lib/auth';
 import { revalidatePath } from 'next/cache';
 import { getAuthUser } from './auth-actions';
@@ -11,19 +12,22 @@ export async function getUserInfoAction() {
         throw new Error('Not authenticated');
     }
 
-    const doc = await db.collection('users').doc(user.id).get();
+    const rs = await db.execute({
+        sql: 'SELECT * FROM users WHERE id = ?',
+        args: [user.id]
+    });
+    const data = rs.rows[0] as any;
 
-    if (!doc.exists) {
+    if (!data) {
         return null;
     }
 
-    const data = doc.data();
     return {
-        id: data?.id,
-        first_name: data?.first_name,
-        last_name: data?.last_name,
-        email: data?.email,
-        created_at: data?.created_at
+        id: data.id,
+        first_name: data.first_name,
+        last_name: data.last_name,
+        email: data.email,
+        created_at: data.created_at
     };
 }
 
@@ -36,19 +40,27 @@ export async function updateUserInfoAction(data: { firstName: string; lastName: 
     }
 
     // Check if email is taken by another user
-    const emailQuery = await db.collection('users').where('email', '==', data.email).limit(1).get();
-    if (!emailQuery.empty) {
-        const otherUser = emailQuery.docs[0];
-        if (otherUser.id !== user.id) {
-            return { error: 'Email already registered by another user' };
-        }
+    const rs = await db.execute({
+        sql: 'SELECT id FROM users WHERE email = ? AND id != ?',
+        args: [data.email, user.id]
+    });
+    if (rs.rows[0]) {
+        return { error: 'Email already registered by another user' };
     }
 
     try {
-        await db.collection('users').doc(user.id).update({
-            first_name: data.firstName,
-            last_name: data.lastName,
-            email: data.email,
+        await db.execute({
+            sql: `
+                UPDATE users 
+                SET first_name = :firstName, last_name = :lastName, email = :email
+                WHERE id = :id
+            `,
+            args: {
+                firstName: data.firstName,
+                lastName: data.lastName,
+                email: data.email,
+                id: user.id
+            }
         });
 
         revalidatePath('/profile');
@@ -64,20 +76,24 @@ export async function updatePasswordAction(data: { currentPassword: string; newP
     if (!user) return { error: 'Not authenticated' };
 
     try {
-        const userDoc = await db.collection('users').doc(user.id).get();
-        if (!userDoc.exists) {
+        const rs = await db.execute({
+            sql: 'SELECT password_hash FROM users WHERE id = ?',
+            args: [user.id]
+        });
+        const userData = rs.rows[0] as any;
+        if (!userData) {
             return { error: 'User not found' };
         }
 
-        const userData = userDoc.data();
-        if (!userData || !(await comparePassword(data.currentPassword, userData.password_hash))) {
+        if (!(await comparePassword(data.currentPassword, userData.password_hash))) {
             return { error: 'Incorrect current password' };
         }
 
         const newHash = await hashPassword(data.newPassword);
 
-        await db.collection('users').doc(user.id).update({
-            password_hash: newHash,
+        await db.execute({
+            sql: 'UPDATE users SET password_hash = ? WHERE id = ?',
+            args: [newHash, user.id]
         });
 
         return { success: 'Password updated successfully' };

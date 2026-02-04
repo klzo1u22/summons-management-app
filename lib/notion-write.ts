@@ -1,5 +1,5 @@
 import { Client } from '@notionhq/client';
-import { db } from './firebase-admin';
+import db from './db';
 
 const notion = new Client({
     auth: process.env.NOTION_API_KEY,
@@ -19,15 +19,20 @@ export async function pushToNotion(type: 'case' | 'summons', id: string) {
             result = await pushSummons(id);
         }
 
-        // If ID was updated during push (swapped to Notion UUID), use the new ID for synced_at update
         const targetId = result && result.newId ? result.newId : id;
-
-        // Update local synced_at timestamp
         const now = new Date().toISOString();
-        const docRef = db.collection(type === 'case' ? 'cases' : 'summons').doc(targetId);
 
-        // Use set with merge to be safe, though update is fine if doc exists (which it should)
-        await docRef.set({ synced_at: now }, { merge: true });
+        if (type === 'case') {
+            await db.execute({
+                sql: 'UPDATE cases SET synced_at = ? WHERE id = ?',
+                args: [now, targetId]
+            });
+        } else {
+            await db.execute({
+                sql: 'UPDATE summons SET synced_at = ? WHERE id = ?',
+                args: [now, targetId]
+            });
+        }
 
         console.log(`Successfully pushed ${type} ${targetId} to Notion.`);
         return { success: true };
@@ -53,15 +58,15 @@ export async function archiveInNotion(id: string) {
 }
 
 export async function pushCase(id: string): Promise<{ newId?: string } | void> {
-    const docRef = db.collection('cases').doc(id);
-    const docSnap = await docRef.get();
+    const rs = await db.execute({
+        sql: 'SELECT * FROM cases WHERE id = ?',
+        args: [id]
+    });
+    const row = rs.rows[0] as any;
+    if (!row) throw new Error(`Case ${id} not found locally.`);
 
-    if (!docSnap.exists) throw new Error(`Case ${id} not found locally.`);
-    const row = docSnap.data() as any;
-
-    // Fields are already arrays in Firestore
-    const assignedOfficer = row.assigned_officer || [];
-    const activity = row.activity || [];
+    const assignedOfficer = JSON.parse(row.assigned_officer || '[]');
+    const activity = JSON.parse(row.activity || '[]');
 
     const properties: any = {
         'Name': { title: [{ text: { content: row.name } }] },
@@ -71,7 +76,6 @@ export async function pushCase(id: string): Promise<{ newId?: string } | void> {
         'POC in Cr': { rich_text: [{ text: { content: row.poc_in_cr || '' } }] },
     };
 
-    // Multi-select fields
     if (assignedOfficer.length > 0) {
         properties['Assigned officer'] = { multi_select: assignedOfficer.map((n: string) => ({ name: n })) };
     }
@@ -79,66 +83,57 @@ export async function pushCase(id: string): Promise<{ newId?: string } | void> {
         properties['Activity'] = { multi_select: activity.map((n: string) => ({ name: n })) };
     }
 
-    // Date fields
-    if (row.date_of_ecir) {
-        properties['Date of ECIR'] = { date: { start: row.date_of_ecir } };
-    }
-    if (row.pao_date) {
-        properties['PAO Date'] = { date: { start: row.pao_date } };
-    }
-    if (row.date_of_pc_filed) {
-        properties['Date of PC Filed'] = { date: { start: row.date_of_pc_filed } };
-    }
-    if (row.court_cognizance_date) {
-        properties['Court Cognizance Date'] = { date: { start: row.court_cognizance_date } };
-    }
+    if (row.date_of_ecir) properties['Date of ECIR'] = { date: { start: row.date_of_ecir } };
+    if (row.pao_date) properties['PAO Date'] = { date: { start: row.pao_date } };
+    if (row.date_of_pc_filed) properties['Date of PC Filed'] = { date: { start: row.date_of_pc_filed } };
+    if (row.court_cognizance_date) properties['Court Cognizance Date'] = { date: { start: row.court_cognizance_date } };
 
-    // Checkbox fields
     properties['Active'] = { checkbox: !!row.active };
     properties['Whether PC Filed'] = { checkbox: !!row.whether_pc_filed };
 
     const isUuid = id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
 
     try {
-        if (!isUuid) {
-            throw { code: 'object_not_found' };
-        }
-        await notion.pages.update({
-            page_id: id,
-            properties: properties
-        });
+        if (!isUuid) throw { code: 'object_not_found', status: 404 };
+        await notion.pages.update({ page_id: id, properties });
     } catch (e: any) {
         if (e.code === 'object_not_found' || e.status === 400 || e.status === 404) {
             const response = await notion.pages.create({
                 parent: { database_id: CASES_DATABASE_ID },
-                properties: properties
+                properties
             });
 
             const newId = response.id;
             console.log(`Created new Case in Notion. Updating local ID from ${id} to ${newId}`);
 
-            await db.runTransaction(async (t) => {
-                // Get fresh data
-                const oldDoc = await t.get(docRef);
-                if (!oldDoc.exists) throw new Error("Document disappeared!");
-                const oldData = oldDoc.data()!;
+            const caseData = { ...row, id: newId };
 
-                // Get related summons that need updating
-                const summonsQuery = db.collection('summons').where('case_id', '==', id);
-                const relatedSummons = await t.get(summonsQuery);
-
-                // Create new doc
-                const newDocRef = db.collection('cases').doc(newId);
-                t.set(newDocRef, { ...oldData, id: newId });
-
-                // Delete old doc
-                t.delete(docRef);
-
-                // Update related summons
-                relatedSummons.docs.forEach(summonsDoc => {
-                    t.update(summonsDoc.ref, { case_id: newId });
-                });
-            });
+            await db.batch([
+                {
+                    sql: `
+                        INSERT INTO cases (
+                            id, name, ecir_no, date_of_ecir, status, assigned_officer, 
+                            activity, pao_amount, pao_date, active, whether_pc_filed, 
+                            date_of_pc_filed, court_cognizance_date, poc_in_cr, 
+                            created_at, last_edited, synced_at
+                        ) VALUES (
+                            :id, :name, :ecir_no, :date_of_ecir, :status, :assigned_officer, 
+                            :activity, :pao_amount, :pao_date, :active, :whether_pc_filed, 
+                            :date_of_pc_filed, :court_cognizance_date, :poc_in_cr, 
+                            :created_at, :last_edited, :synced_at
+                        )
+                    `,
+                    args: caseData
+                },
+                {
+                    sql: 'UPDATE summons SET case_id = ? WHERE case_id = ?',
+                    args: [newId, id]
+                },
+                {
+                    sql: 'DELETE FROM cases WHERE id = ?',
+                    args: [id]
+                }
+            ], "write");
 
             return { newId };
         } else {
@@ -148,15 +143,15 @@ export async function pushCase(id: string): Promise<{ newId?: string } | void> {
 }
 
 export async function pushSummons(id: string): Promise<{ newId?: string } | void> {
-    const docRef = db.collection('summons').doc(id);
-    const docSnap = await docRef.get();
+    const rs = await db.execute({
+        sql: 'SELECT * FROM summons WHERE id = ?',
+        args: [id]
+    });
+    const row = rs.rows[0] as any;
+    if (!row) throw new Error(`Summons ${id} not found locally.`);
 
-    if (!docSnap.exists) throw new Error(`Summons ${id} not found locally.`);
-    const row = docSnap.data() as any;
-
-    // Direct array access
-    const modeOfService = row.mode_of_service || [];
-    const purpose = row.purpose || [];
+    const modeOfService = JSON.parse(row.mode_of_service || '[]');
+    const purpose = JSON.parse(row.purpose || '[]');
 
     const properties: any = {
         'Name of Person': { title: [{ text: { content: row.person_name } }] },
@@ -167,104 +162,87 @@ export async function pushSummons(id: string): Promise<{ newId?: string } | void
         'Statement Status': row.statement_status ? { select: { name: row.statement_status } } : undefined,
     };
 
-    // Case relation
-    if (row.case_id) {
-        // Warning: If case_id is not a valid UUID (not synced yet), this might fail in Notion if Notion expects a UUID relation
-        // However, we usually sync Case first or id is already UUID.
-        // If it's a pending link (e.g. "Pending Link"), we skip.
-        if (row.case_id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-            properties['Case '] = { relation: [{ id: row.case_id }] };
-        }
+    if (row.case_id && row.case_id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+        properties['Case '] = { relation: [{ id: row.case_id }] };
     }
 
-    // Date fields
-    if (row.issue_date) {
-        properties['Date of Summon Issue'] = { date: { start: row.issue_date } };
-    }
-
+    if (row.issue_date) properties['Date of Summon Issue'] = { date: { start: row.issue_date } };
     if (row.appearance_date) {
-        const start = row.appearance_time
-            ? `${row.appearance_date}T${row.appearance_time}:00.000Z`
-            : row.appearance_date;
-        properties['Scheduled Appearance Date'] = { date: { start: start } };
+        const start = row.appearance_time ? `${row.appearance_date}T${row.appearance_time}:00.000Z` : row.appearance_date;
+        properties['Scheduled Appearance Date'] = { date: { start } };
+    }
+    if (row.rescheduled_date) properties['Rescheduled Date'] = { date: { start: row.rescheduled_date } };
+    if (row.date_of_1st_statement) properties['Date of 1st Statement'] = { date: { start: row.date_of_1st_statement } };
+    if (row.date_of_2nd_statement) properties['Date of 2nd Statement'] = { date: { start: row.date_of_2nd_statement } };
+    if (row.date_of_3rd_statement) properties['Date of 3rd Statement'] = { date: { start: row.date_of_3rd_statement } };
+
+    if (modeOfService.length > 0) properties['Mode of Service'] = { multi_select: modeOfService.map((n: string) => ({ name: n })) };
+    if (purpose.length > 0) properties['Purpose of Summons'] = { multi_select: purpose.map((n: string) => ({ name: n })) };
+
+    properties['Summon issued'] = { checkbox: !!row.is_issued };
+    properties['SummonServed'] = { checkbox: !!row.is_served };
+    properties['Reschedule request received'] = { checkbox: !!row.requests_reschedule };
+    properties['Appeared ongoing staement'] = { checkbox: !!row.statement_ongoing };
+    properties['Statement Completed'] = { checkbox: !!row.statement_recorded };
+    properties['Rescheduled date communicated'] = { checkbox: !!row.rescheduled_date_communicated };
+    properties['Followup required'] = { checkbox: !!row.followup_required };
+
+    if (row.previous_summon_id && row.previous_summon_id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+        properties['Previous Summon'] = { relation: [{ id: row.previous_summon_id }] };
     }
 
-    if (row.rescheduled_date) {
-        properties['Rescheduled Date'] = { date: { start: row.rescheduled_date } };
-    }
-
-    // Statement dates
-    if (row.date_of_1st_statement) {
-        properties['Date of 1st Statement'] = { date: { start: row.date_of_1st_statement } };
-    }
-    if (row.date_of_2nd_statement) {
-        properties['Date of 2nd Statement'] = { date: { start: row.date_of_2nd_statement } };
-    }
-    if (row.date_of_3rd_statement) {
-        properties['Date of 3rd Statement'] = { date: { start: row.date_of_3rd_statement } };
-    }
-
-    // Multi-select fields
-    if (modeOfService.length > 0) {
-        properties['Mode of Service'] = { multi_select: modeOfService.map((n: string) => ({ name: n })) };
-    }
-    if (purpose.length > 0) {
-        properties['Purpose of Summons'] = { multi_select: purpose.map((n: string) => ({ name: n })) };
-    }
-
-    // Checkbox fields
-    properties['Summon issued'] = { checkbox: row.is_issued ? true : false };
-    properties['SummonServed'] = { checkbox: row.is_served ? true : false };
-    properties['Reschedule request received'] = { checkbox: row.requests_reschedule ? true : false };
-    properties['Appeared ongoing staement'] = { checkbox: row.statement_ongoing ? true : false };
-    properties['Statement Completed'] = { checkbox: row.statement_recorded ? true : false };
-    properties['Rescheduled date communicated'] = { checkbox: row.rescheduled_date_communicated ? true : false };
-    properties['Followup required'] = { checkbox: row.followup_required ? true : false };
-
-    // Previous Summon relation
-    if (row.previous_summon_id) {
-        if (row.previous_summon_id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-            properties['Previous Summon'] = { relation: [{ id: row.previous_summon_id }] };
-        }
-    }
-
-    // Remove undefined properties
-    Object.keys(properties).forEach(key => {
-        if (properties[key] === undefined) {
-            delete properties[key];
-        }
-    });
+    Object.keys(properties).forEach(key => { if (properties[key] === undefined) delete properties[key]; });
 
     const isUuid = id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
 
     try {
-        if (!isUuid) {
-            throw { code: 'object_not_found', status: 404 };
-        }
-        await notion.pages.update({
-            page_id: id,
-            properties: properties
-        });
+        if (!isUuid) throw { code: 'object_not_found', status: 404 };
+        await notion.pages.update({ page_id: id, properties });
     } catch (e: any) {
-        // Handle both 404 (object_not_found) and 400 (validation_error for non-uuid)
         if (e.code === 'object_not_found' || e.status === 400 || e.status === 404) {
             const response = await notion.pages.create({
                 parent: { database_id: SUMMONS_DATABASE_ID },
-                properties: properties
+                properties
             });
 
             const newId = response.id;
             console.log(`Created new Summons in Notion. Updating local ID from ${id} to ${newId}`);
 
-            await db.runTransaction(async (t) => {
-                const oldDoc = await t.get(docRef);
-                if (!oldDoc.exists) throw new Error("Summons disappeared!");
-                const oldData = oldDoc.data()!;
-
-                const newDocRef = db.collection('summons').doc(newId);
-                t.set(newDocRef, { ...oldData, id: newId });
-                t.delete(docRef);
-            });
+            const summonsData = { ...row, id: newId };
+            await db.batch([
+                {
+                    sql: `
+                        INSERT INTO summons (
+                            id, case_id, person_name, person_role, contact_number, email, 
+                            priority, tone, purpose, notes, issue_date, served_date, 
+                            mode_of_service, appearance_date, appearance_time, 
+                            rescheduled_date, rescheduled_date_communicated, 
+                            statement_status, date_of_1st_statement, date_of_2nd_statement, 
+                            date_of_3rd_statement, followup_required, summons_response, 
+                            status, is_issued, is_served, requests_reschedule, 
+                            statement_ongoing, statement_recorded, previous_summon_id, created_at, synced_at
+                        ) VALUES (
+                            :id, :case_id, :person_name, :person_role, :contact_number, :email, 
+                            :priority, :tone, :purpose, :notes, :issue_date, :served_date, 
+                            :mode_of_service, :appearance_date, :appearance_time, 
+                            :rescheduled_date, :rescheduled_date_communicated, 
+                            :statement_status, :date_of_1st_statement, :date_of_2nd_statement, 
+                            :date_of_3rd_statement, :followup_required, :summons_response, 
+                            :status, :is_issued, :is_served, :requests_reschedule, 
+                            :statement_ongoing, :statement_recorded, :previous_summon_id, :created_at, :synced_at
+                        )
+                    `,
+                    args: summonsData
+                },
+                {
+                    sql: 'DELETE FROM summons WHERE id = ?',
+                    args: [id]
+                },
+                {
+                    sql: 'UPDATE activity_logs SET summons_id = ? WHERE summons_id = ?',
+                    args: [newId, id]
+                }
+            ], "write");
 
             return { newId };
         } else {

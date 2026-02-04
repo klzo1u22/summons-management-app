@@ -13,7 +13,7 @@ import {
     deleteCaseFB,
     getRecentActivityFB,
     getActivityLogsFB
-} from '@/lib/firestore-data';
+} from '@/lib/sqlite-data';
 import { Summons } from '@/lib/types';
 import { revalidatePath } from 'next/cache';
 import { syncCases } from '@/lib/sync-cases';

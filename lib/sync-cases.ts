@@ -1,14 +1,25 @@
-import { db } from './firebase-admin';
-import { Case } from './types';
+import db from './db';
+import { CASES_DATABASE_ID } from './notion';
 
-const DATABASE_ID = process.env.NOTION_CASES_DATABASE_ID || '';
 const NOTION_API_KEY = process.env.NOTION_API_KEY || '';
 
-export async function syncCases() {
+export interface SyncResult {
+    success: boolean;
+    added: number;
+    updated: number;
+    errors: string[];
+}
+
+export async function syncCases(): Promise<SyncResult> {
     console.log("Starting Case Sync...");
 
+    if (!CASES_DATABASE_ID || !NOTION_API_KEY) {
+        console.error("Missing Notion configuration for cases sync");
+        return { success: false, added: 0, updated: 0, errors: ["Missing configuration"] };
+    }
+
     try {
-        const response = await fetch(`https://api.notion.com/v1/databases/${DATABASE_ID}/query`, {
+        const response = await fetch(`https://api.notion.com/v1/databases/${CASES_DATABASE_ID}/query`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${NOTION_API_KEY}`,
@@ -25,75 +36,125 @@ export async function syncCases() {
         const data = await response.json();
         const results = data.results;
 
-        console.log(`Fetched ${results.length} cases from Notion.`);
+        let addedCount = 0;
+        let updatedCount = 0;
+        const errors: string[] = [];
 
-        const batch = db.batch();
+        // Check existing IDs in SQLite
+        const rs = await db.execute('SELECT id, synced_at FROM cases');
+        const existingCases = rs.rows as any[];
+        const existingIds = new Map(existingCases.map(c => [c.id, c.synced_at]));
         const syncedIds = new Set<string>();
 
-        const mappedCases = results.map((page: any) => {
-            const props = page.properties;
+        const toInsert: any[] = [];
+        const toUpdate: any[] = [];
+
+        for (const page of results) {
             const id = page.id;
             syncedIds.add(id);
+            const props = (page as any).properties;
 
-            const getTitle = (key: string) => props[key]?.title?.[0]?.plain_text || 'Untitled Case';
-            const getText = (key: string) => props[key]?.rich_text?.[0]?.plain_text || '';
-            const getDate = (key: string) => props[key]?.date?.start || null;
-            const getSelect = (key: string) => props[key]?.select?.name || 'Unknown';
-            const getMultiSelect = (key: string) => props[key]?.multi_select?.map((o: any) => o.name) || [];
+            try {
+                const getTitle = (key: string) => props[key]?.title?.[0]?.plain_text || 'Unknown Case';
+                const getText = (key: string) => props[key]?.rich_text?.[0]?.plain_text || '';
+                const getDate = (key: string) => props[key]?.date?.start || null;
+                const getSelect = (key: string) => props[key]?.select?.name || null;
+                const getMultiSelectArray = (key: string) => props[key]?.multi_select?.map((o: any) => o.name) || [];
+                const getCheckbox = (key: string) => props[key]?.checkbox ?? true; // Default Active to true if missing?
 
-            return {
-                id: id,
-                name: getTitle('Name'),
-                ecir_no: getText('ECIR NO.'),
-                date_of_ecir: getDate('Date of ECIR'),
-                status: getSelect('Status'),
-                assigned_officer: getMultiSelect('Assigned officer'),
-                activity: getMultiSelect('Activity'),
-                pao_amount: getText('PAO Amount'),
-                pao_date: getDate('PAO Date'),
-                active: props['Active']?.checkbox ? 1 : 0,
-                whether_pc_filed: props['Whether PC filed']?.checkbox ? 1 : 0,
-                date_of_pc_filed: getDate('Date of PC filed'),
-                court_cognizance_date: getDate('Court Cognizance Date'),
-                poc_in_cr: getText('POC in Cr.'),
-                created_at: page.created_time,
-                last_edited: page.last_edited_time,
-                synced_at: new Date().toISOString()
-            };
+                const caseParams = {
+                    id: id,
+                    name: getTitle('Case Name') || getTitle('Name'),
+                    ecir_no: getText('ECIR No') || getText('ECIR Number'),
+                    date_of_ecir: getDate('Date of ECIR'),
+                    status: getSelect('Status'),
+                    assigned_officer: JSON.stringify(getMultiSelectArray('Assigned Officer')),
+                    activity: JSON.stringify(getMultiSelectArray('Activity')),
+                    pao_amount: getText('PAO Amount'),
+                    pao_date: getDate('PAO Date'),
+                    active: getCheckbox('Active') ? 1 : 0,
+                    whether_pc_filed: getCheckbox('Whether PC Filed') ? 1 : 0,
+                    date_of_pc_filed: getDate('Date of PC Filed'),
+                    court_cognizance_date: getDate('Court Cognizance Date'),
+                    poc_in_cr: getText('POC in Cr'),
+                    created_at: page.created_time,
+                    last_edited: page.last_edited_time,
+                    synced_at: new Date().toISOString()
+                };
+
+                if (existingIds.has(id)) {
+                    toUpdate.push(caseParams);
+                    updatedCount++;
+                } else {
+                    toInsert.push(caseParams);
+                    addedCount++;
+                }
+            } catch (err: any) {
+                console.error(`Error processing case ${id}:`, err);
+                errors.push(`Failed to process case ${id}: ${err.message}`);
+            }
+        }
+
+        const statements: any[] = [];
+
+        toInsert.forEach(c => {
+            statements.push({
+                sql: `
+                INSERT INTO cases (
+                    id, name, ecir_no, date_of_ecir, status, assigned_officer, 
+                    activity, pao_amount, pao_date, active, whether_pc_filed, 
+                    date_of_pc_filed, court_cognizance_date, poc_in_cr, 
+                    created_at, last_edited, synced_at
+                ) VALUES (
+                    :id, :name, :ecir_no, :date_of_ecir, :status, :assigned_officer, 
+                    :activity, :pao_amount, :pao_date, :active, :whether_pc_filed, 
+                    :date_of_pc_filed, :court_cognizance_date, :poc_in_cr, 
+                    :created_at, :last_edited, :synced_at
+                )
+                `,
+                args: c
+            });
         });
 
-        // Add updates/sets to batch
-        mappedCases.forEach((c: any) => {
-            const docRef = db.collection('cases').doc(c.id);
-            // cleaning undefined values
-            const clearData = JSON.parse(JSON.stringify(c));
-            batch.set(docRef, clearData);
+        toUpdate.forEach(c => {
+            statements.push({
+                sql: `
+                UPDATE cases SET 
+                    name = :name, ecir_no = :ecir_no, date_of_ecir = :date_of_ecir, 
+                    status = :status, assigned_officer = :assigned_officer, 
+                    activity = :activity, pao_amount = :pao_amount, pao_date = :pao_date, 
+                    active = :active, whether_pc_filed = :whether_pc_filed, 
+                    date_of_pc_filed = :date_of_pc_filed, 
+                    court_cognizance_date = :court_cognizance_date, 
+                    poc_in_cr = :poc_in_cr, last_edited = :last_edited, 
+                    synced_at = :synced_at
+                WHERE id = :id
+                `,
+                args: c
+            });
         });
 
         // Cleanup: remove local cases that were synced but are now missing from Notion
-        const casesSnap = await db.collection('cases').select('synced_at').get();
-        const toDelete: string[] = [];
-        casesSnap.docs.forEach(doc => {
-            const data = doc.data();
-            if (data.synced_at && !syncedIds.has(doc.id)) {
-                toDelete.push(doc.id);
-            }
-        });
-
+        const toDelete = Array.from(existingIds.keys()).filter(id => !syncedIds.has(id));
         if (toDelete.length > 0) {
             console.log(`Cleaning up ${toDelete.length} cases removed from Notion.`);
             toDelete.forEach(id => {
-                batch.delete(db.collection('cases').doc(id));
+                statements.push({
+                    sql: 'DELETE FROM cases WHERE id = ?',
+                    args: [id]
+                });
             });
         }
 
-        await batch.commit();
+        if (statements.length > 0) {
+            await db.batch(statements, "write");
+        }
 
-        console.log(`Successfully synced ${mappedCases.length} cases.`);
-        return { success: true, count: mappedCases.length };
+        console.log(`Successfully synced ${addedCount} new cases and updated ${updatedCount} cases.`);
+        return { success: true, added: addedCount, updated: updatedCount, errors };
 
     } catch (error: any) {
         console.error("Case Sync Failed:", error.message);
-        return { success: false, error: error.message };
+        return { success: false, added: 0, updated: 0, errors: [error.message] };
     }
 }

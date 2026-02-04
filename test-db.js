@@ -1,45 +1,78 @@
-const Database = require('better-sqlite3');
+const { createClient } = require('@libsql/client');
 const path = require('path');
+const dotenv = require('dotenv');
 
-const dbPath = path.join(process.cwd(), 'summons.db');
-const db = new Database(dbPath);
+// Load env vars from .env.local
+dotenv.config({ path: '.env.local' });
 
-console.log('Testing DB...');
+const url = process.env.TURSO_DATABASE_URL || `file:${path.join(process.cwd(), 'summons.db')}`;
+const authToken = process.env.TURSO_AUTH_TOKEN;
 
-try {
-    // Check table info
-    const info = db.pragma('table_info(summons)');
-    console.log('Columns:', info.map(c => c.name));
+console.log('Connecting to:', url);
 
-    const stmt = db.prepare('SELECT * FROM summons WHERE id = ?');
-    const row = stmt.get('invalid-id');
-    console.log('Row for invalid-id:', row);
+const db = createClient({
+    url: url,
+    authToken: authToken,
+});
 
-    db.prepare(`
-        INSERT INTO summons (id, case_id, person_name, created_at, status, is_issued, is_served, requests_reschedule, statement_ongoing, statement_recorded, rescheduled_date_communicated, followup_required, previous_summon_id, served_date) 
-        VALUES ('test-1', 'case-1', 'Test Person', '2023-01-01', 'Draft', 0, 0, 0, 0, 0, 0, 0, NULL, NULL)
-    `).run();
+async function main() {
+    console.log('Testing DB...');
 
-    const row2 = stmt.get('test-1');
-    console.log('Row for test-1:', row2);
+    try {
+        // Check table info (different syntax for remote vs local usually, but standard SQL works)
+        const info = await db.execute("PRAGMA table_info(summons)");
+        console.log('Columns:', info.rows.map(c => c.name));
 
-    // Test parsing logic from actions.ts
-    const parseSummons = (row) => ({
-        ...row,
-        mode_of_service: JSON.parse(row.mode_of_service || '[]'),
-        purpose: JSON.parse(row.purpose || '[]'),
-        is_issued: !!row.is_issued,
-        is_served: !!row.is_served,
-        requests_reschedule: !!row.requests_reschedule,
-        statement_ongoing: !!row.statement_ongoing,
-        statement_recorded: !!row.statement_recorded,
-        rescheduled_date_communicated: !!row.rescheduled_date_communicated,
-        followup_required: !!row.followup_required,
-        served_date: row.served_date || null
-    });
+        // Test Select
+        const rs = await db.execute({
+            sql: 'SELECT * FROM summons WHERE id = ?',
+            args: ['invalid-id']
+        });
+        const row = rs.rows[0];
+        console.log('Row for invalid-id:', row);
 
-    console.log('Parsed:', parseSummons(row2));
+        // Test Insert
+        await db.execute({
+            sql: `
+            INSERT INTO summons (id, case_id, person_name, created_at, status, is_issued, is_served, requests_reschedule, statement_ongoing, statement_recorded, rescheduled_date_communicated, followup_required, previous_summon_id, served_date) 
+            VALUES ('test-1', 'case-1', 'Test Person', '2023-01-01', 'Draft', 0, 0, 0, 0, 0, 0, 0, NULL, NULL)
+            ON CONFLICT(id) DO UPDATE SET 
+                person_name = excluded.person_name,
+                status = excluded.status
+            `, // Added upsert logic to make it re-runnable or just ignore error
+            args: []
+        });
 
-} catch (e) {
-    console.error('Error:', e);
+        const rs2 = await db.execute({
+            sql: 'SELECT * FROM summons WHERE id = ?',
+            args: ['test-1']
+        });
+        const row2 = rs2.rows[0];
+        console.log('Row for test-1:', row2);
+
+        // Test parsing logic from actions.ts
+        const parseSummons = (row) => ({
+            ...row,
+            mode_of_service: JSON.parse(row.mode_of_service || '[]'),
+            purpose: JSON.parse(row.purpose || '[]'),
+            is_issued: !!row.is_issued,
+            is_served: !!row.is_served,
+            requests_reschedule: !!row.requests_reschedule,
+            statement_ongoing: !!row.statement_ongoing,
+            statement_recorded: !!row.statement_recorded,
+            rescheduled_date_communicated: !!row.rescheduled_date_communicated,
+            followup_required: !!row.followup_required,
+            served_date: row.served_date || null
+        });
+
+        if (row2) {
+            console.log('Parsed:', parseSummons(row2));
+        }
+
+    } catch (e) {
+        console.error('Error:', e);
+    }
 }
+
+main();
+

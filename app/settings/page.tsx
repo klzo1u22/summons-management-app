@@ -123,7 +123,7 @@ export default function SettingsPage() {
                     showFlash('success', 'Database restored. Reloading...');
                     setTimeout(() => window.location.reload(), 2000);
                 } else {
-                    showFlash('error', result.error);
+                    showFlash('error', result.error || 'Restore failed');
                 }
             }
         };
