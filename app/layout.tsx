@@ -1,6 +1,7 @@
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import './main.css';
 import { initDatabase } from '@/lib/db';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -37,6 +38,7 @@ export default async function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body>
         <ClientLayout>{children}</ClientLayout>
+        <SpeedInsights />
       </body>
     </html>
   );
