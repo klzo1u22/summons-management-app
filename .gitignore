@@ -49,6 +49,8 @@ google-services.json
 # database / local data
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 *.log
 notion_sample.json
 notion_schema*.json
