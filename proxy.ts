@@ -4,7 +4,7 @@ import { decrypt } from '@/lib/auth';
 const PROTECTED_ROUTES = ['/', '/reports', '/profile', '/settings'];
 const AUTH_ROUTES = ['/login'];
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
     const { pathname } = request.nextUrl;
     const session = request.cookies.get('session')?.value;
 

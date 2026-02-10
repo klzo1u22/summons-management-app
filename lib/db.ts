@@ -107,7 +107,8 @@ export async function initDatabase() {
                 old_value TEXT,
                 new_value TEXT,
                 description TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (summons_id) REFERENCES summons(id) ON DELETE CASCADE
             )
         `);
 

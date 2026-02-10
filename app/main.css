@@ -1215,8 +1215,58 @@ code,
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  overflow: hidden;
+  overflow-x: auto;
+  position: relative;
 }
+
+/* Scrollable containers across different views */
+.table-wrapper,
+.options-table-container,
+.preview-card .table-wrapper,
+.overflow-x-auto {
+  overflow-x: auto !important;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent wrapping in scrollable tables to force horizontal scroll when needed */
+.overflow-x-auto table th,
+.overflow-x-auto table td,
+.table-wrapper table th,
+.table-wrapper table td {
+  white-space: nowrap !important;
+}
+
+/* Custom scrollbar for better aesthetics */
+.overflow-x-auto::-webkit-scrollbar,
+.table-container::-webkit-scrollbar,
+.table-wrapper::-webkit-scrollbar,
+.options-table-container::-webkit-scrollbar {
+  height: 6px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-track,
+.table-container::-webkit-scrollbar-track,
+.table-wrapper::-webkit-scrollbar-track,
+.options-table-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.overflow-x-auto::-webkit-scrollbar-thumb,
+.table-container::-webkit-scrollbar-thumb,
+.table-wrapper::-webkit-scrollbar-thumb,
+.options-table-container::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 10px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-thumb:hover,
+.table-container::-webkit-scrollbar-thumb:hover,
+.table-wrapper::-webkit-scrollbar-thumb:hover,
+.options-table-container::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
 
 .data-table {
   width: 100%;
@@ -1229,7 +1279,10 @@ code,
   top: 0;
 }
 
-.data-table th {
+.data-table th,
+.report-table th,
+.settings-table th,
+.table th {
   padding: var(--space-3) var(--space-4);
   text-align: left;
   font-size: 0.75rem;
@@ -1238,17 +1291,22 @@ code,
   text-transform: uppercase;
   letter-spacing: 0.05em;
   border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
 
 .data-table th.sort-active {
   color: var(--primary);
 }
 
-.data-table td {
+.data-table td,
+.report-table td,
+.settings-table td,
+.table td {
   padding: var(--space-3) var(--space-4);
   font-size: 0.875rem;
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
 }
 
 .data-table tbody tr:hover {

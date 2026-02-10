@@ -1,20 +1,24 @@
 'use client';
 
 import React, { useEffect, useState, useMemo, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import {
     FileText, Search, Plus, Download, RefreshCw, FileSpreadsheet, FileDown,
     Filter, ChevronDown, Calendar, BarChart3, Sun, Moon,
     AlertTriangle, CheckCircle2, Clock, MoreVertical, Edit2, Trash2, Eye, History,
     LayoutGrid, List, FileCheck, AlertCircle, MessageSquare, Briefcase, User as UserIcon,
-    ArrowLeft, ArrowRight, FolderKanban, ChevronLeft, ChevronRight, XCircle, ClipboardList, Zap, CalendarDays
+    ArrowLeft, ArrowRight, FolderKanban, ChevronLeft, ChevronRight, XCircle, ClipboardList, Zap, CalendarDays,
+    Check, X
 } from 'lucide-react';
+import { Input } from "@/components/ui/Input";
+import { Select } from "@/components/ui/Select";
 import { NotificationBell, Header } from '@/components/layout';
 import {
     getSummonsAction, getCasesAction, deleteSummonsAction, updateSummonsAction, addSummonsAction, syncDataAction,
     getActivityLogsAction
 } from './actions';
 import { getOptionsAction, getSettingsAction } from './settings-actions';
-import { Summons, Case, PRIORITY_OPTIONS, PERSON_ROLE_OPTIONS, SUMMONS_RESPONSE_OPTIONS, STATEMENT_STATUS_OPTIONS } from '@/lib/types';
+import { Summons, Case, PRIORITY_OPTIONS, PERSON_ROLE_OPTIONS, SUMMONS_RESPONSE_OPTIONS, STATEMENT_STATUS_OPTIONS, PURPOSE_OPTIONS } from '@/lib/types';
 import { EditSummonModal } from '@/components/summons/EditSummonModal';
 import { LifecycleSummonForm } from '@/components/forms/LifecycleSummonForm';
 import { FilterPopup, FilterState } from '@/components/ui/FilterPopup';
@@ -72,6 +76,7 @@ const SortableHeader = ({ label, field, currentField, direction, onSort }: Sorta
 
 export default function UnifiedDashboard() {
     const { theme, toggleTheme } = useTheme();
+    const router = useRouter();
     // State
     const [summons, setSummons] = useState<Summons[]>([]);
     const [cases, setCases] = useState<Case[]>([]);
@@ -97,11 +102,12 @@ export default function UnifiedDashboard() {
     });
     const [sortField, setSortField] = useState<SortField>('appearance_date');
     const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
-    const [editingSummon, setEditingSummon] = useState<Summons | null>(null);
     const [viewingActivity, setViewingActivity] = useState<string | null>(null);
-    const [showAddModal, setShowAddModal] = useState(false);
     const [showExportMenu, setShowExportMenu] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [editingRowId, setEditingRowId] = useState<string | null>(null);
+    const [editValues, setEditValues] = useState<Partial<Summons>>({});
+    const [isSavingInline, setIsSavingInline] = useState(false);
 
     const exportMenuRef = useRef<HTMLDivElement>(null);
     const [appSettings, setAppSettings] = useState<Record<string, string>>({});
@@ -151,6 +157,92 @@ export default function UnifiedDashboard() {
             alert('Failed to sync with Notion');
         } finally {
             setIsSyncing(false);
+        }
+    };
+
+    // Inline Editing Handlers
+    const startRowEdit = (item: Summons) => {
+        setEditingRowId(item.id);
+        setEditValues({
+            person_name: item.person_name,
+            person_role: item.person_role,
+            case_id: item.case_id,
+            issue_date: item.issue_date,
+            appearance_date: item.appearance_date,
+            priority: item.priority,
+            contact_number: item.contact_number,
+            purpose: item.purpose,
+            status: item.status,
+            rescheduled_date: item.rescheduled_date,
+            summons_response: item.summons_response,
+            is_served: item.is_served,
+            statement_status: item.statement_status,
+            date_of_1st_statement: item.date_of_1st_statement,
+            date_of_2nd_statement: item.date_of_2nd_statement,
+            date_of_3rd_statement: item.date_of_3rd_statement,
+            statement_recorded: item.statement_recorded,
+            tone: item.tone,
+        });
+    };
+
+    const cancelRowEdit = () => {
+        setEditingRowId(null);
+        setEditValues({});
+        setIsSavingInline(false);
+    };
+
+    const handleEditChange = (field: keyof Summons, value: any) => {
+        setEditValues(prev => ({ ...prev, [field]: value }));
+    };
+
+    const saveRowEdit = async () => {
+        if (!editingRowId) return;
+        try {
+            setIsSavingInline(true);
+            const original = summons.find(s => s.id === editingRowId);
+            if (!original) return;
+
+            const isDifferent = (key: keyof Summons) => {
+                const newVal = editValues[key];
+                const oldVal = original[key];
+                if (Array.isArray(newVal) && Array.isArray(oldVal)) {
+                    if (newVal.length !== oldVal.length) return true;
+                    return !newVal.every((v, i) => v === oldVal[i]);
+                }
+                return newVal !== oldVal;
+            };
+
+            const updates: Partial<Summons> = {};
+            if (isDifferent('person_name')) updates.person_name = editValues.person_name;
+            if (isDifferent('person_role')) updates.person_role = editValues.person_role;
+            if (isDifferent('case_id')) updates.case_id = editValues.case_id;
+            if (isDifferent('issue_date')) updates.issue_date = editValues.issue_date;
+            if (isDifferent('appearance_date')) updates.appearance_date = editValues.appearance_date;
+            if (isDifferent('priority')) updates.priority = editValues.priority;
+            if (isDifferent('contact_number')) updates.contact_number = editValues.contact_number;
+            if (editValues.purpose && isDifferent('purpose')) updates.purpose = editValues.purpose;
+            if (isDifferent('status')) updates.status = editValues.status;
+            if (isDifferent('rescheduled_date')) updates.rescheduled_date = editValues.rescheduled_date;
+            if (isDifferent('summons_response')) updates.summons_response = editValues.summons_response;
+            if (isDifferent('is_served')) updates.is_served = editValues.is_served;
+            if (isDifferent('statement_status')) updates.statement_status = editValues.statement_status;
+            if (isDifferent('date_of_1st_statement')) updates.date_of_1st_statement = editValues.date_of_1st_statement;
+            if (isDifferent('date_of_2nd_statement')) updates.date_of_2nd_statement = editValues.date_of_2nd_statement;
+            if (isDifferent('date_of_3rd_statement')) updates.date_of_3rd_statement = editValues.date_of_3rd_statement;
+            if (isDifferent('statement_recorded')) updates.statement_recorded = editValues.statement_recorded;
+            if (isDifferent('tone')) updates.tone = editValues.tone;
+
+            if (Object.keys(updates).length > 0) {
+                await updateSummonsAction(editingRowId, updates);
+                await loadData();
+            }
+            setEditingRowId(null);
+            setEditValues({});
+        } catch (error) {
+            console.error("Failed to update", error);
+            alert("Failed to update record.");
+        } finally {
+            setIsSavingInline(false);
         }
     };
 
@@ -385,7 +477,6 @@ export default function UnifiedDashboard() {
         };
 
         setSummons(prev => [newSummons, ...prev]);
-        setShowAddModal(false);
         await addSummonsAction(newSummons);
         loadData();
     };
@@ -553,11 +644,21 @@ export default function UnifiedDashboard() {
                 renderHeader: () => <SortableHeader label="Person Name" field="person_name" currentField={sortField} direction={sortDirection} onSort={handleSort} />,
                 renderCell: (s) => (
                     <td key="person_name">
-                        <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
-                            {s.person_name}
-                        </span>
-                        {s.contact_number && (
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{s.contact_number}</div>
+                        {editingRowId === s.id ? (
+                            <Input
+                                value={editValues.person_name || ''}
+                                onChange={(e) => handleEditChange('person_name', e.target.value)}
+                                className="h-8 text-sm"
+                            />
+                        ) : (
+                            <>
+                                <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+                                    {s.person_name}
+                                </span>
+                                {s.contact_number && (
+                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{s.contact_number}</div>
+                                )}
+                            </>
                         )}
                     </td>
                 ),
@@ -569,9 +670,22 @@ export default function UnifiedDashboard() {
                 renderHeader: () => <th key="case">Case</th>,
                 renderCell: (s) => (
                     <td key="case">
-                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                            {getCaseName(s.case_id)}
-                        </span>
+                        {editingRowId === s.id ? (
+                            <Select
+                                value={editValues.case_id || ''}
+                                onChange={(e) => handleEditChange('case_id', e.target.value)}
+                                className="h-8 text-xs"
+                            >
+                                <option value="" disabled>Select Case</option>
+                                {cases.map(c => (
+                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                ))}
+                            </Select>
+                        ) : (
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                                {getCaseName(s.case_id)}
+                            </span>
+                        )}
                     </td>
                 ),
                 export: (s) => getCaseName(s.case_id)
@@ -580,7 +694,24 @@ export default function UnifiedDashboard() {
                 id: 'role',
                 label: 'Role',
                 renderHeader: () => <th key="role">Role</th>,
-                renderCell: (s) => <td key="role">{s.person_role || '-'}</td>,
+                renderCell: (s) => (
+                    <td key="role">
+                        {editingRowId === s.id ? (
+                            <Select
+                                value={editValues.person_role || ''}
+                                onChange={(e) => handleEditChange('person_role', e.target.value)}
+                                className="h-8 text-xs"
+                            >
+                                <option value="" disabled>Select Role</option>
+                                {PERSON_ROLE_OPTIONS.map(r => (
+                                    <option key={r} value={r}>{r}</option>
+                                ))}
+                            </Select>
+                        ) : (
+                            s.person_role || '-'
+                        )}
+                    </td>
+                ),
                 export: (s) => s.person_role || '-'
             },
             appearance_date: {
@@ -588,8 +719,19 @@ export default function UnifiedDashboard() {
                 label: 'Appearance Date',
                 renderHeader: () => <SortableHeader label="Appearance Date" field="appearance_date" currentField={sortField} direction={sortDirection} onSort={handleSort} />,
                 renderCell: (s) => (
-                    <td key="appearance_date" style={{ fontWeight: 500, color: s.appearance_date && s.appearance_date < new Date().toISOString().split('T')[0] && !s.rescheduled_date ? 'var(--error)' : 'inherit' }}>
-                        {formatDate(s.appearance_date)}
+                    <td key="appearance_date">
+                        {editingRowId === s.id ? (
+                            <Input
+                                type="date"
+                                value={editValues.appearance_date || ''}
+                                onChange={(e) => handleEditChange('appearance_date', e.target.value)}
+                                className="h-8 text-xs"
+                            />
+                        ) : (
+                            <div style={{ fontWeight: 500, color: s.appearance_date && s.appearance_date < new Date().toISOString().split('T')[0] && !s.rescheduled_date ? 'var(--error)' : 'inherit' }}>
+                                {formatDate(s.appearance_date)}
+                            </div>
+                        )}
                     </td>
                 ),
                 export: (s) => s.appearance_date || '-'
@@ -598,28 +740,89 @@ export default function UnifiedDashboard() {
                 id: 'status',
                 label: 'Status',
                 renderHeader: () => <SortableHeader label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />,
-                renderCell: (s) => <td key="status">{getStatusBadge(s)}</td>,
+                renderCell: (s) => (
+                    <td key="status">
+                        {editingRowId === s.id ? (
+                            <Select
+                                value={editValues.status || ''}
+                                onChange={(e) => handleEditChange('status', e.target.value)}
+                                className="h-8 text-xs"
+                            >
+                                <option value="Draft">Draft</option>
+                                <option value="Issued">Issued</option>
+                                <option value="Served">Served</option>
+                                <option value="Rescheduled">Rescheduled</option>
+                                <option value="Completed">Completed</option>
+                            </Select>
+                        ) : (
+                            getStatusBadge(s)
+                        )}
+                    </td>
+                ),
                 export: (s) => s.status
             },
             priority: {
                 id: 'priority',
                 label: 'Priority',
                 renderHeader: () => <SortableHeader label="Priority" field="priority" currentField={sortField} direction={sortDirection} onSort={handleSort} />,
-                renderCell: (s) => <td key="priority">{getPriorityBadge(s.priority)}</td>,
+                renderCell: (s) => (
+                    <td key="priority">
+                        {editingRowId === s.id ? (
+                            <Select
+                                value={editValues.priority || ''}
+                                onChange={(e) => handleEditChange('priority', e.target.value)}
+                                className="h-8 text-xs"
+                            >
+                                <option value="" disabled>Select Priority</option>
+                                {PRIORITY_OPTIONS.map(p => (
+                                    <option key={p} value={p}>{p}</option>
+                                ))}
+                            </Select>
+                        ) : (
+                            getPriorityBadge(s.priority)
+                        )}
+                    </td>
+                ),
                 export: (s) => s.priority || '-'
             },
             rescheduled_date: {
                 id: 'rescheduled_date',
                 label: 'Rescheduled Date',
                 renderHeader: () => <th key="rescheduled_date">Rescheduled Date</th>,
-                renderCell: (s) => <td key="rescheduled_date">{formatDate(s.rescheduled_date)}</td>,
+                renderCell: (s) => (
+                    <td key="rescheduled_date">
+                        {editingRowId === s.id ? (
+                            <Input
+                                type="date"
+                                value={editValues.rescheduled_date || ''}
+                                onChange={(e) => handleEditChange('rescheduled_date', e.target.value)}
+                                className="h-8 text-xs"
+                            />
+                        ) : (
+                            formatDate(s.rescheduled_date)
+                        )}
+                    </td>
+                ),
                 export: (s) => s.rescheduled_date || '-'
             },
             issue_date: {
                 id: 'issue_date',
                 label: 'Issue Date',
                 renderHeader: () => <th key="issue_date">Issue Date</th>,
-                renderCell: (s) => <td key="issue_date">{formatDate(s.issue_date)}</td>,
+                renderCell: (s) => (
+                    <td key="issue_date">
+                        {editingRowId === s.id ? (
+                            <Input
+                                type="date"
+                                value={editValues.issue_date || ''}
+                                onChange={(e) => handleEditChange('issue_date', e.target.value)}
+                                className="h-8 text-xs"
+                            />
+                        ) : (
+                            formatDate(s.issue_date)
+                        )}
+                    </td>
+                ),
                 export: (s) => s.issue_date || '-'
             },
             created_at: {
@@ -635,10 +838,23 @@ export default function UnifiedDashboard() {
                 renderHeader: () => <th key="response">Response</th>,
                 renderCell: (s) => (
                     <td key="response">
-                        {s.summons_response && (
-                            <span className={`badge ${s.summons_response === 'Served' ? 'badge-success' : 'badge-neutral'}`}>
-                                {s.summons_response}
-                            </span>
+                        {editingRowId === s.id ? (
+                            <Select
+                                value={editValues.summons_response || ''}
+                                onChange={(e) => handleEditChange('summons_response', e.target.value)}
+                                className="h-8 text-xs"
+                            >
+                                <option value="">Select Response</option>
+                                {SUMMONS_RESPONSE_OPTIONS.map(opt => (
+                                    <option key={opt} value={opt}>{opt}</option>
+                                ))}
+                            </Select>
+                        ) : (
+                            s.summons_response && (
+                                <span className={`badge ${s.summons_response === 'Served' ? 'badge-success' : 'badge-neutral'}`}>
+                                    {s.summons_response}
+                                </span>
+                            )
                         )}
                     </td>
                 ),
@@ -650,10 +866,22 @@ export default function UnifiedDashboard() {
                 renderHeader: () => <th key="served">Served</th>,
                 renderCell: (s) => (
                     <td key="served">
-                        {s.is_served ? (
-                            <span className="badge badge-success"><CheckCircle2 size={12} /></span>
+                        {editingRowId === s.id ? (
+                            <div className="flex items-center gap-1">
+                                <input
+                                    type="checkbox"
+                                    checked={editValues.is_served || false}
+                                    onChange={(e) => handleEditChange('is_served', e.target.checked)}
+                                    className="w-4 h-4"
+                                />
+                                <span className="text-xs">Served</span>
+                            </div>
                         ) : (
-                            <span className="badge badge-neutral"><XCircle size={12} /></span>
+                            s.is_served ? (
+                                <span className="badge badge-success"><CheckCircle2 size={12} /></span>
+                            ) : (
+                                <span className="badge badge-neutral"><XCircle size={12} /></span>
+                            )
                         )}
                     </td>
                 ),
@@ -665,9 +893,22 @@ export default function UnifiedDashboard() {
                 renderHeader: () => <th key="statement_status">Statement Status</th>,
                 renderCell: (s) => (
                     <td key="statement_status">
-                        <span className={`badge ${s.statement_status === 'Completed' ? 'badge-success' : 'badge-neutral'}`}>
-                            {s.statement_status || 'Pending'}
-                        </span>
+                        {editingRowId === s.id ? (
+                            <Select
+                                value={editValues.statement_status || ''}
+                                onChange={(e) => handleEditChange('statement_status', e.target.value)}
+                                className="h-8 text-xs"
+                            >
+                                <option value="">Select Status</option>
+                                {STATEMENT_STATUS_OPTIONS.map(opt => (
+                                    <option key={opt} value={opt}>{opt}</option>
+                                ))}
+                            </Select>
+                        ) : (
+                            <span className={`badge ${s.statement_status === 'Completed' ? 'badge-success' : 'badge-neutral'}`}>
+                                {s.statement_status || 'Pending'}
+                            </span>
+                        )}
                     </td>
                 ),
                 export: (s) => s.statement_status || 'Pending'
@@ -676,21 +917,60 @@ export default function UnifiedDashboard() {
                 id: 'date_of_1st_statement',
                 label: '1st Statement',
                 renderHeader: () => <th key="date_of_1st_statement">1st Statement</th>,
-                renderCell: (s) => <td key="date_of_1st_statement">{formatDate(s.date_of_1st_statement)}</td>,
+                renderCell: (s) => (
+                    <td key="date_of_1st_statement">
+                        {editingRowId === s.id ? (
+                            <Input
+                                type="date"
+                                value={editValues.date_of_1st_statement || ''}
+                                onChange={(e) => handleEditChange('date_of_1st_statement', e.target.value)}
+                                className="h-8 text-xs"
+                            />
+                        ) : (
+                            formatDate(s.date_of_1st_statement)
+                        )}
+                    </td>
+                ),
                 export: (s) => s.date_of_1st_statement || '-'
             },
             date_of_2nd_statement: {
                 id: 'date_of_2nd_statement',
                 label: '2nd Statement',
                 renderHeader: () => <th key="date_of_2nd_statement">2nd Statement</th>,
-                renderCell: (s) => <td key="date_of_2nd_statement">{formatDate(s.date_of_2nd_statement)}</td>,
+                renderCell: (s) => (
+                    <td key="date_of_2nd_statement">
+                        {editingRowId === s.id ? (
+                            <Input
+                                type="date"
+                                value={editValues.date_of_2nd_statement || ''}
+                                onChange={(e) => handleEditChange('date_of_2nd_statement', e.target.value)}
+                                className="h-8 text-xs"
+                            />
+                        ) : (
+                            formatDate(s.date_of_2nd_statement)
+                        )}
+                    </td>
+                ),
                 export: (s) => s.date_of_2nd_statement || '-'
             },
             date_of_3rd_statement: {
                 id: 'date_of_3rd_statement',
                 label: '3rd Statement',
                 renderHeader: () => <th key="date_of_3rd_statement">3rd Statement</th>,
-                renderCell: (s) => <td key="date_of_3rd_statement">{formatDate(s.date_of_3rd_statement)}</td>,
+                renderCell: (s) => (
+                    <td key="date_of_3rd_statement">
+                        {editingRowId === s.id ? (
+                            <Input
+                                type="date"
+                                value={editValues.date_of_3rd_statement || ''}
+                                onChange={(e) => handleEditChange('date_of_3rd_statement', e.target.value)}
+                                className="h-8 text-xs"
+                            />
+                        ) : (
+                            formatDate(s.date_of_3rd_statement)
+                        )}
+                    </td>
+                ),
                 export: (s) => s.date_of_3rd_statement || '-'
             },
             recorded: {
@@ -699,10 +979,22 @@ export default function UnifiedDashboard() {
                 renderHeader: () => <th key="recorded">Recorded</th>,
                 renderCell: (s) => (
                     <td key="recorded">
-                        {s.statement_recorded ? (
-                            <span className="badge badge-success">Yes</span>
+                        {editingRowId === s.id ? (
+                            <div className="flex items-center gap-1">
+                                <input
+                                    type="checkbox"
+                                    checked={editValues.statement_recorded || false}
+                                    onChange={(e) => handleEditChange('statement_recorded', e.target.checked)}
+                                    className="w-4 h-4"
+                                />
+                                <span className="text-xs">Recorded</span>
+                            </div>
                         ) : (
-                            <span className="badge badge-neutral">No</span>
+                            s.statement_recorded ? (
+                                <span className="badge badge-success">Yes</span>
+                            ) : (
+                                <span className="badge badge-neutral">No</span>
+                            )
                         )}
                     </td>
                 ),
@@ -712,7 +1004,20 @@ export default function UnifiedDashboard() {
                 id: 'tone',
                 label: 'Tone',
                 renderHeader: () => <th key="tone">Tone</th>,
-                renderCell: (s) => <td key="tone">{s.tone || '-'}</td>,
+                renderCell: (s) => (
+                    <td key="tone">
+                        {editingRowId === s.id ? (
+                            <Input
+                                value={editValues.tone || ''}
+                                onChange={(e) => handleEditChange('tone', e.target.value)}
+                                className="h-8 text-xs"
+                                placeholder="Tone..."
+                            />
+                        ) : (
+                            s.tone || '-'
+                        )}
+                    </td>
+                ),
                 export: (s) => s.tone || '-'
             },
             purpose: {
@@ -721,11 +1026,32 @@ export default function UnifiedDashboard() {
                 renderHeader: () => <th key="purpose">Purpose</th>,
                 renderCell: (s) => (
                     <td key="purpose">
-                        <div className="flex gap-1 flex-wrap">
-                            {s.purpose?.map((p, i) => (
-                                <span key={i} className="badge badge-sm badge-neutral">{p}</span>
-                            ))}
-                        </div>
+                        {editingRowId === s.id ? (
+                            <div className="flex flex-col gap-1">
+                                <Select
+                                    value={Array.isArray(editValues.purpose) && editValues.purpose.length > 0 ? editValues.purpose[0] : ''}
+                                    onChange={(e) => handleEditChange('purpose', [e.target.value])}
+                                    className="h-8 text-xs"
+                                >
+                                    <option value="" disabled>Select Purpose</option>
+                                    {PURPOSE_OPTIONS.map(p => (
+                                        <option key={p} value={p}>{p}</option>
+                                    ))}
+                                </Select>
+                                <Input
+                                    value={Array.isArray(editValues.purpose) ? editValues.purpose.join(', ') : ''}
+                                    onChange={(e) => handleEditChange('purpose', e.target.value.split(',').map(v => v.trim()).filter(Boolean))}
+                                    className="h-7 text-[10px]"
+                                    placeholder="Custom..."
+                                />
+                            </div>
+                        ) : (
+                            <div className="flex gap-1 flex-wrap">
+                                {s.purpose?.map((p, i) => (
+                                    <span key={i} className="badge badge-sm badge-neutral">{p}</span>
+                                ))}
+                            </div>
+                        )}
                     </td>
                 ),
                 export: (s) => s.purpose?.join(', ') || '-'
@@ -734,7 +1060,20 @@ export default function UnifiedDashboard() {
                 id: 'contact',
                 label: 'Contact',
                 renderHeader: () => <th key="contact">Contact</th>,
-                renderCell: (s) => <td key="contact">{s.contact_number || '-'}</td>,
+                renderCell: (s) => (
+                    <td key="contact">
+                        {editingRowId === s.id ? (
+                            <Input
+                                value={editValues.contact_number || ''}
+                                onChange={(e) => handleEditChange('contact_number', e.target.value)}
+                                className="h-8 text-xs"
+                                placeholder="Contact..."
+                            />
+                        ) : (
+                            s.contact_number || '-'
+                        )}
+                    </td>
+                ),
                 export: (s) => s.contact_number || '-'
             },
             actions: {
@@ -744,15 +1083,31 @@ export default function UnifiedDashboard() {
                 renderCell: (s) => (
                     <td key="actions">
                         <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
-                            <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setViewingActivity(s.id)} title="View History">
-                                <Clock size={14} />
-                            </button>
-                            <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setEditingSummon(s)} title="Edit">
-                                <Edit2 size={14} />
-                            </button>
-                            <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleDelete(s.id)} title="Delete" style={{ color: 'var(--error)' }}>
-                                <Trash2 size={14} />
-                            </button>
+                            {editingRowId === s.id ? (
+                                <>
+                                    <button className="btn btn-ghost btn-icon btn-sm text-success" onClick={saveRowEdit} title="Save" disabled={isSavingInline}>
+                                        <Check size={14} />
+                                    </button>
+                                    <button className="btn btn-ghost btn-icon btn-sm text-error" onClick={cancelRowEdit} title="Cancel" disabled={isSavingInline}>
+                                        <X size={14} />
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setViewingActivity(s.id)} title="View History">
+                                        <Clock size={14} />
+                                    </button>
+                                    <button className="btn btn-ghost btn-icon btn-sm text-amber-600" onClick={() => startRowEdit(s)} title="Inline Edit">
+                                        <Edit2 size={14} />
+                                    </button>
+                                    <button className="btn btn-ghost btn-icon btn-sm" onClick={() => router.push(`/summons/${s.id}`)} title="Full Details/Edit">
+                                        <Eye size={14} />
+                                    </button>
+                                    <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleDelete(s.id)} title="Delete" style={{ color: 'var(--error)' }}>
+                                        <Trash2 size={14} />
+                                    </button>
+                                </>
+                            )}
                         </div>
                     </td>
                 ),
@@ -794,7 +1149,7 @@ export default function UnifiedDashboard() {
             .filter(id => !hiddenColumns.includes(id))
             .map(id => baseColumns[id])
             .filter(Boolean);
-    }, [viewMode, sortField, sortDirection, handleSort, formatDate, getCaseName, getStatusBadge, getPriorityBadge, setEditingSummon, handleDelete, hiddenColumns]);
+    }, [viewMode, sortField, sortDirection, handleSort, formatDate, getCaseName, getStatusBadge, getPriorityBadge, router, handleDelete, hiddenColumns]);
 
     const visibleColumns = columns;
 
@@ -841,7 +1196,7 @@ export default function UnifiedDashboard() {
                     setCurrentPage(1);
                 }}
                 searchPlaceholder="Search by name, case, role..."
-                onAddClick={() => setShowAddModal(true)}
+                onAddClick={() => router.push('/summons/new')}
                 addLabel="New Summons"
                 actions={
                     <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
@@ -1104,43 +1459,6 @@ export default function UnifiedDashboard() {
                     onClose={() => setShowFilterPopup(false)}
                 />
             )}
-
-            {/* Add Summons Drawer */}
-            <Drawer
-                isOpen={showAddModal}
-                onClose={() => setShowAddModal(false)}
-                title="Add New Summons"
-                width="560px"
-            >
-                <LifecycleSummonForm
-                    cases={cases}
-                    options={dynamicOptions}
-                    onSubmit={handleAddSummons}
-                    onCancel={() => setShowAddModal(false)}
-                />
-            </Drawer>
-
-            {/* Edit Summons Drawer */}
-            <Drawer
-                isOpen={!!editingSummon}
-                onClose={() => setEditingSummon(null)}
-                title={editingSummon ? `Edit: ${editingSummon.person_name}` : 'Edit Summons'}
-                width="560px"
-            >
-                {editingSummon && (
-                    <LifecycleSummonForm
-                        initialData={editingSummon}
-                        cases={cases}
-                        options={dynamicOptions}
-                        onSubmit={async (data: any) => {
-                            await updateSummonsAction(editingSummon.id, data);
-                            await loadData();
-                            setEditingSummon(null);
-                        }}
-                        onCancel={() => setEditingSummon(null)}
-                    />
-                )}
-            </Drawer>
 
             {/* Activity Log Drawer */}
             <Drawer

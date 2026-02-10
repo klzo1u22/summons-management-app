@@ -6,8 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
-    User, FileText, Calendar, MessageSquare, CheckCircle2,
-    ChevronDown, ChevronUp, Lock, Check
+    User, Calendar, CheckCircle2
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -23,22 +22,7 @@ import {
 import { deriveStatusFromData } from '@/lib/summons-state-machine';
 
 // ============ TYPES ============
-type LifecycleStage = 'draft' | 'issue_service' | 'appearance' | 'statement' | 'closure';
 
-interface StageConfig {
-    id: LifecycleStage;
-    label: string;
-    icon: React.ReactNode;
-    description: string;
-}
-
-const STAGES: StageConfig[] = [
-    { id: 'draft', label: 'Draft', icon: <FileText size={18} />, description: 'Basic person and case details' },
-    { id: 'issue_service', label: 'Issue & Service', icon: <Calendar size={18} />, description: 'Issue date, service mode, served date' },
-    { id: 'appearance', label: 'Appearance', icon: <User size={18} />, description: 'Appearance and reschedule dates' },
-    { id: 'statement', label: 'Statement', icon: <MessageSquare size={18} />, description: 'Statement recording dates' },
-    { id: 'closure', label: 'Close', icon: <CheckCircle2 size={18} />, description: 'Follow-up and final notes' },
-];
 
 // ============ SCHEMA ============
 const lifecycleSchema = z.object({
@@ -147,73 +131,38 @@ const lifecycleSchema = z.object({
 
 type LifecycleFormData = z.infer<typeof lifecycleSchema>;
 
+import { forwardRef, useImperativeHandle } from 'react';
+
+// ... existing imports
+
 interface LifecycleSummonFormProps {
     onSubmit?: (data: LifecycleFormData) => Promise<void>;
     onCancel?: () => void;
     initialData?: Partial<Summons>;
     cases?: Case[];
     options?: Record<string, any[]>;
+    readOnly?: boolean;
 }
 
-// ============ HELPER: Determine unlocked stages ============
-function getUnlockedStages(data: Partial<LifecycleFormData>): Set<LifecycleStage> {
-    const unlocked = new Set<LifecycleStage>(['draft']); // Always unlocked
-
-    // Stage 2 unlocks if stage 1 has minimum required data
-    if (data.person_name && data.case_id) {
-        unlocked.add('issue_service');
-    }
-
-    // Stage 3 unlocks if stage 2 has served_date (or at least issue_date)
-    if (data.served_date) {
-        unlocked.add('appearance');
-    }
-
-    // Stage 4 unlocks if appearance exists or served
-    if (data.appearance_date || data.served_date) {
-        unlocked.add('statement');
-    }
-
-    // Stage 5 unlocks if any statement date exists
-    if (data.date_of_1st_statement) {
-        unlocked.add('closure');
-    }
-
-    return unlocked;
+export interface LifecycleSummonFormRef {
+    submitForm: () => Promise<void>;
 }
 
-// ============ HELPER: Stage completion check ============
-function isStageComplete(stage: LifecycleStage, data: Partial<LifecycleFormData>): boolean {
-    switch (stage) {
-        case 'draft':
-            return !!(data.person_name && data.case_id);
-        case 'issue_service':
-            return !!(data.issue_date && data.served_date);
-        case 'appearance':
-            return !!(data.appearance_date);
-        case 'statement':
-            return !!(data.date_of_1st_statement);
-        case 'closure':
-            return data.followup_required !== undefined;
-        default:
-            return false;
-    }
-}
-
-// ============ COMPONENT ============
-export function LifecycleSummonForm({
+export const LifecycleSummonForm = forwardRef<LifecycleSummonFormRef, LifecycleSummonFormProps>(({
     onSubmit: propsOnSubmit,
     onCancel,
     initialData,
     cases = [],
-    options = {}
-}: LifecycleSummonFormProps) {
+    options = {},
+    readOnly = false
+}, ref) => {
     const router = useRouter();
-    const [expandedStages, setExpandedStages] = useState<Set<LifecycleStage>>(new Set(['draft']));
 
     const { register, handleSubmit, setValue, watch, formState: { errors, isSubmitting } } = useForm<LifecycleFormData>({
+        // ... existing config
         resolver: zodResolver(lifecycleSchema),
         defaultValues: {
+            // ... (same as before)
             person_name: initialData?.person_name ?? '',
             person_role: initialData?.person_role ?? '',
             case_id: initialData?.case_id ?? '',
@@ -239,469 +188,453 @@ export function LifecycleSummonForm({
         }
     });
 
-    // Watch specific fields to avoid broad re-renders
-    const watchPersonName = watch('person_name');
-    const watchCaseId = watch('case_id');
-    const watchIssueDate = watch('issue_date');
-    const watchServedDate = watch('served_date');
-    const watchAppearanceDate = watch('appearance_date');
-    const watchRescheduledDate = watch('rescheduled_date');
-    const watch1stStatementDate = watch('date_of_1st_statement');
-    const watchStatementStatus = watch('statement_status');
-    const watchFollowupRequired = watch('followup_required');
-
-    const unlockedStages = useMemo(() => {
-        return getUnlockedStages({
-            person_name: watchPersonName,
-            case_id: watchCaseId,
-            served_date: watchServedDate,
-            appearance_date: watchAppearanceDate,
-            date_of_1st_statement: watch1stStatementDate
-        });
-    }, [watchPersonName, watchCaseId, watchServedDate, watchAppearanceDate, watch1stStatementDate]);
-
-    // Derive current status from data
-    const currentStatus = useMemo(() => {
-        return deriveStatusFromData({
-            issue_date: watchIssueDate,
-            served_date: watchServedDate,
-            appearance_date: watchAppearanceDate,
-            rescheduled_date: watchRescheduledDate,
-            date_of_1st_statement: watch1stStatementDate,
-            statement_status: watchStatementStatus,
-            followup_required: watchFollowupRequired,
-        });
-    }, [watchIssueDate, watchServedDate, watchAppearanceDate, watchRescheduledDate, watch1stStatementDate, watchStatementStatus, watchFollowupRequired]);
-
-    const formData = watch(); // Needed for stage completion checks in render
-
-    // Toggle stage expansion
-    const toggleStage = (stageId: LifecycleStage) => {
-        if (!unlockedStages.has(stageId)) return; // Can't expand locked stages
-
-        setExpandedStages(prev => {
-            const next = new Set(prev);
-            if (next.has(stageId)) {
-                next.delete(stageId);
-            } else {
-                next.add(stageId);
+    const onSubmit = async (data: LifecycleFormData) => {
+        try {
+            if (propsOnSubmit) {
+                await propsOnSubmit(data);
             }
-            return next;
-        });
+            router.refresh();
+            if (onCancel) {
+                onCancel();
+            }
+        } catch (error) {
+            console.error("Error submitting form:", error);
+        }
     };
 
-    // Auto-expand current stage when it unlocks
-    useEffect(() => {
-        const lastUnlockedIndex = STAGES.reduce((acc, stage, idx) => {
-            return unlockedStages.has(stage.id) ? idx : acc;
-        }, 0);
+    useImperativeHandle(ref, () => ({
+        submitForm: () => handleSubmit(onSubmit)()
+    }));
 
-        if (lastUnlockedIndex >= 0) {
-            const currentStage = STAGES[lastUnlockedIndex];
-            setExpandedStages(prev => {
-                if (prev.has(currentStage.id)) return prev;
-                const next = new Set(prev);
-                next.add(currentStage.id);
-                return next;
-            });
-        }
-    }, [unlockedStages]);
+    // Watched values for conditional rendering and derived state
+    const modeOfServiceValue = watch('mode_of_service');
+    const purposeValue = watch('purpose');
+    const watchAppearanceDate = watch('appearance_date');
+    const allValues = watch();
 
-    // Form submission
-    const onSubmit = async (data: LifecycleFormData): Promise<void> => {
-        if (propsOnSubmit) {
-            await propsOnSubmit(data);
-        }
-        router.refresh();
-        onCancel?.();
-    };
+    // enhance validation status derived from current form state
+    const currentStatus = useMemo(() => deriveStatusFromData(allValues as any), [allValues]);
 
-    // Multi-select values
-    const modeOfServiceValue = watch('mode_of_service') || [];
-    const purposeValue = watch('purpose') || [];
+    // Helper to render read-only text
+    const ReadOnlyField = ({ value, fallback = '-' }: { value: string | number | undefined | null, fallback?: string }) => (
+        <div className="min-h-[2.75rem] py-2 px-3 text-sm text-[var(--text-primary)] bg-transparent border-b border-[var(--border-subtle)]/50">
+            {value || fallback}
+        </div>
+    );
+
 
     // ============ RENDER ============
     return (
-        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col h-full">
-            {/* Status Badge */}
-            <div className="px-6 py-3 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)]">
-                <div className="flex items-center gap-2">
-                    <span className="text-sm text-[var(--text-secondary)]">Current Status:</span>
-                    <span className="px-2 py-1 rounded text-xs font-medium bg-[var(--accent-primary)] text-white">
-                        {currentStatus}
-                    </span>
+        <form onSubmit={handleSubmit(onSubmit)} className="h-full flex flex-col gap-8 relative z-10 pb-20">
+            {/* Sticky Action Bar */}
+            <div className="sticky top-0 z-50 flex items-center justify-between bg-[var(--background)]/80 backdrop-blur-md p-4 -mx-4 px-8 border-b border-[var(--border)] transition-all duration-200">
+                <div className="flex items-center gap-4">
+                    <div className="flex flex-col">
+                        <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest">Status</span>
+                        <div className={`mt-1 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${currentStatus === 'Closed' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' :
+                            currentStatus === 'Draft' ? 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700' :
+                                'bg-blue-500/10 text-blue-600 border-blue-500/20'
+                            }`}>
+                            {currentStatus.toUpperCase()}
+                        </div>
+                    </div>
+                    {initialData?.id && (
+                        <>
+                            <div className="h-8 w-px bg-[var(--border)]" />
+                            <div className="flex flex-col">
+                                <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest">Record ID</span>
+                                <span className="text-sm font-mono text-[var(--text-primary)] mt-0.5">{initialData.id}</span>
+                            </div>
+                        </>
+                    )}
                 </div>
-            </div>
 
-            {/* Stage Tracker (horizontal) */}
-            <div className="px-6 py-4 border-b border-[var(--border-primary)]">
-                <div className="flex items-center justify-between">
-                    {STAGES.map((stage, idx) => {
-                        const isUnlocked = unlockedStages.has(stage.id);
-                        const isComplete = isStageComplete(stage.id, formData);
-
-                        return (
-                            <React.Fragment key={stage.id}>
-                                <div className="flex flex-col items-center gap-1">
-                                    <div
-                                        className={`
-                      w-8 h-8 rounded-full flex items-center justify-center text-sm
-                      transition-all duration-200
-                      ${isComplete
-                                                ? 'bg-green-500 text-white'
-                                                : isUnlocked
-                                                    ? 'bg-[var(--accent-primary)] text-white'
-                                                    : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
-                                            }
-                    `}
-                                    >
-                                        {isComplete ? <Check size={14} /> : isUnlocked ? idx + 1 : <Lock size={12} />}
-                                    </div>
-                                    <span className={`text-xs ${isUnlocked ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
-                                        {stage.label}
-                                    </span>
-                                </div>
-                                {idx < STAGES.length - 1 && (
-                                    <div className={`flex-1 h-0.5 mx-2 ${isComplete ? 'bg-green-500' : 'bg-[var(--border-primary)]'}`} />
-                                )}
-                            </React.Fragment>
-                        );
-                    })}
-                </div>
-            </div>
-
-            {/* Scrollable Stages Area */}
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
-                {STAGES.map((stage) => {
-                    const isUnlocked = unlockedStages.has(stage.id);
-                    const isExpanded = expandedStages.has(stage.id);
-                    const isComplete = isStageComplete(stage.id, formData);
-
-                    return (
-                        <div
-                            key={stage.id}
-                            className={`
-                border rounded-lg transition-all duration-200
-                ${isUnlocked
-                                    ? 'border-[var(--border-primary)] bg-[var(--bg-primary)]'
-                                    : 'border-[var(--border-secondary)] bg-[var(--bg-tertiary)] opacity-60'
-                                }
-              `}
-                        >
-                            {/* Stage Header */}
-                            <button
+                <div className="flex items-center gap-3">
+                    {/* Only show Cancel/Save if NOT readOnly, OR if this is a new submisison */}
+                    {!readOnly && (
+                        <>
+                            <Button
                                 type="button"
-                                onClick={() => toggleStage(stage.id)}
-                                disabled={!isUnlocked}
-                                className={`
-                  w-full px-4 py-3 flex items-center justify-between
-                  ${isUnlocked ? 'cursor-pointer hover:bg-[var(--bg-secondary)]' : 'cursor-not-allowed'}
-                  rounded-t-lg transition-colors
-                `}
+                                variant="ghost"
+                                onClick={onCancel}
+                                className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
                             >
-                                <div className="flex items-center gap-3">
-                                    <div className={`
-                    p-1.5 rounded
-                    ${isComplete ? 'bg-green-500/20 text-green-500' : isUnlocked ? 'bg-[var(--accent-primary)]/20 text-[var(--accent-primary)]' : 'text-[var(--text-muted)]'}
-                  `}>
-                                        {isComplete ? <Check size={18} /> : stage.icon}
-                                    </div>
-                                    <div className="text-left">
-                                        <div className="font-medium text-[var(--text-primary)]">{stage.label}</div>
-                                        <div className="text-xs text-[var(--text-secondary)]">{stage.description}</div>
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    {!isUnlocked && <Lock size={14} className="text-[var(--text-muted)]" />}
-                                    {isUnlocked && (isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />)}
-                                </div>
-                            </button>
+                                Cancel
+                            </Button>
+                            <Button
+                                type="submit"
+                                disabled={isSubmitting}
+                                className="bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white shadow-lg shadow-[var(--primary)]/20 min-w-[120px]"
+                            >
+                                {isSubmitting ? 'Saving...' : 'Save Record'}
+                            </Button>
+                        </>
+                    )}
+                </div>
+            </div>
 
-                            {/* Stage Content */}
-                            {isUnlocked && isExpanded && (
-                                <div className="px-4 pb-4 space-y-4 border-t border-[var(--border-secondary)]">
-                                    {stage.id === 'draft' && (
-                                        <div className="pt-4 grid grid-cols-2 gap-4">
-                                            <div className="col-span-2">
-                                                <Label htmlFor="person_name">Person Name <span className="text-red-500">*</span></Label>
-                                                <Input
-                                                    id="person_name"
-                                                    {...register('person_name')}
-                                                    placeholder="Full name of the person"
-                                                />
-                                                {errors.person_name && <p className="text-red-500 text-xs mt-1">{errors.person_name.message}</p>}
-                                            </div>
+            {/* Main Form Grid - Fluid Row-Based Flow */}
+            <div className="grid grid-cols-12 gap-12 pb-12">
 
-                                            <div>
-                                                <Label htmlFor="person_role">Role</Label>
-                                                <Select
-                                                    id="person_role"
-                                                    value={watch('person_role') || ''}
-                                                    onChange={(e) => setValue('person_role', e.target.value)}
-                                                >
-                                                    <option value="">Select role...</option>
-                                                    {options.person_role ? options.person_role.map((o: any) => (
-                                                        <option key={o.id} value={o.option_value}>{o.option_value}</option>
-                                                    )) : PERSON_ROLE_OPTIONS.map((o: string) => (
-                                                        <option key={o} value={o}>{o}</option>
-                                                    ))}
-                                                </Select>
-                                            </div>
+                {/* Section: Identity & Casework (Span 12 on mobile, 6 on md, 4 on xl) */}
+                <div className="col-span-12 md:col-span-6 xl:col-span-4 flex flex-col gap-6">
+                    <div className="flex items-center gap-2 pb-2 border-b border-[var(--border)]">
+                        <User size={20} className="text-[var(--primary)]" />
+                        <h3 className="text-lg font-semibold text-[var(--text-primary)]">Identity Profile</h3>
+                    </div>
 
-                                            <div>
-                                                <Label htmlFor="case_id">Case <span className="text-red-500">*</span></Label>
-                                                <Select
-                                                    id="case_id"
-                                                    value={watch('case_id') || ''}
-                                                    onChange={(e) => setValue('case_id', e.target.value)}
-                                                >
-                                                    <option value="">Select case...</option>
-                                                    {cases.map((c: any) => (
-                                                        <option key={c.id} value={c.id}>{c.name}</option>
-                                                    ))}
-                                                </Select>
-                                                {errors.case_id && <p className="text-red-500 text-xs mt-1">{errors.case_id.message}</p>}
-                                            </div>
+                    <div className="space-y-6">
+                        <div className="space-y-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="person_name" className="text-sm font-medium text-[var(--text-secondary)]">Target Individual <span className="text-red-500">*</span></Label>
+                                {readOnly ? (
+                                    <ReadOnlyField value={watch('person_name')} />
+                                ) : (
+                                    <>
+                                        <Input
+                                            id="person_name"
+                                            {...register('person_name')}
+                                            placeholder="Full Legal Name"
+                                            className="h-11 bg-[var(--surface)] border-[var(--border-subtle)] focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] text-base"
+                                        />
+                                        {errors.person_name && <p className="text-xs text-red-500 mt-1">{errors.person_name.message}</p>}
+                                    </>
+                                )}
+                            </div>
 
-                                            <div>
-                                                <Label htmlFor="contact_number">Contact Number</Label>
-                                                <Input id="contact_number" {...register('contact_number')} placeholder="+91..." />
-                                            </div>
-
-                                            <div>
-                                                <Label htmlFor="email">Email</Label>
-                                                <Input id="email" type="email" {...register('email')} placeholder="email@example.com" />
-                                                {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email.message}</p>}
-                                            </div>
-
-                                            <div>
-                                                <Label htmlFor="priority">Priority</Label>
-                                                <Select
-                                                    id="priority"
-                                                    value={watch('priority') || 'Medium'}
-                                                    onChange={(e) => setValue('priority', e.target.value)}
-                                                >
-                                                    {options.priority ? options.priority.map((o: any) => (
-                                                        <option key={o.id} value={o.option_value}>{o.option_value}</option>
-                                                    )) : PRIORITY_OPTIONS.map((o: string) => (
-                                                        <option key={o} value={o}>{o}</option>
-                                                    ))}
-                                                </Select>
-                                            </div>
-
-                                            <div>
-                                                <Label htmlFor="tone">Tone</Label>
-                                                <Select
-                                                    id="tone"
-                                                    value={watch('tone') || ''}
-                                                    onChange={(e) => setValue('tone', e.target.value)}
-                                                >
-                                                    <option value="">Select tone...</option>
-                                                    {options.tone ? options.tone.map((o: any) => (
-                                                        <option key={o.id} value={o.option_value}>{o.option_value}</option>
-                                                    )) : TONE_OPTIONS.map((o: string) => (
-                                                        <option key={o} value={o}>{o}</option>
-                                                    ))}
-                                                </Select>
-                                            </div>
-
-                                            <div className="col-span-2">
-                                                <MultiSelect
-                                                    label="Purpose"
-                                                    options={options.purpose ? options.purpose.map((o: any) => o.option_value) : PURPOSE_OPTIONS}
-                                                    selected={purposeValue}
-                                                    onChange={(val) => setValue('purpose', val)}
-                                                    placeholder="Select purpose(s)..."
-                                                />
-                                            </div>
-
-                                            <div className="col-span-2">
-                                                <Label htmlFor="notes">Notes</Label>
-                                                <textarea
-                                                    id="notes"
-                                                    {...register('notes')}
-                                                    rows={2}
-                                                    className="w-full px-3 py-2 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded-lg text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
-                                                    placeholder="Additional notes..."
-                                                />
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {stage.id === 'issue_service' && (
-                                        <div className="pt-4 space-y-4">
-                                            <div className="p-3 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-secondary)]">
-                                                <p className="text-sm text-[var(--text-secondary)]">
-                                                    Fill in the issue date first, then select service mode and served date.
-                                                </p>
-                                            </div>
-
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div>
-                                                    <Label htmlFor="issue_date">Issue Date</Label>
-                                                    <Input id="issue_date" type="date" {...register('issue_date')} />
-                                                </div>
-
-                                                <div>
-                                                    <Label htmlFor="served_date">Served Date</Label>
-                                                    <Input
-                                                        id="served_date"
-                                                        type="date"
-                                                        {...register('served_date')}
-                                                        disabled={!formData.issue_date}
-                                                    />
-                                                    {errors.served_date && <p className="text-red-500 text-xs mt-1">{errors.served_date.message}</p>}
-                                                </div>
-
-                                                <div className="col-span-2">
-                                                    <MultiSelect
-                                                        label="Mode of Service"
-                                                        options={options.mode_of_service ? options.mode_of_service.map((o: any) => o.option_value) : MODE_OF_SERVICE_OPTIONS}
-                                                        selected={modeOfServiceValue}
-                                                        onChange={(val) => setValue('mode_of_service', val)}
-                                                        placeholder="Select mode(s)..."
-                                                    />
-                                                </div>
-
-                                                <div>
-                                                    <Label htmlFor="summons_response">Summons Response</Label>
-                                                    <Select
-                                                        id="summons_response"
-                                                        value={watch('summons_response') || ''}
-                                                        onChange={(e) => setValue('summons_response', e.target.value)}
-                                                    >
-                                                        <option value="">Select response...</option>
-                                                        {options.summons_response ? options.summons_response.map((o: any) => (
-                                                            <option key={o.id} value={o.option_value}>{o.option_value}</option>
-                                                        )) : SUMMONS_RESPONSE_OPTIONS.map((o: string) => (
-                                                            <option key={o} value={o}>{o}</option>
-                                                        ))}
-                                                    </Select>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {stage.id === 'appearance' && (
-                                        <div className="pt-4 grid grid-cols-2 gap-4">
-                                            <div>
-                                                <Label htmlFor="appearance_date">Appearance Date</Label>
-                                                <Input id="appearance_date" type="date" {...register('appearance_date')} />
-                                                {errors.appearance_date && <p className="text-red-500 text-xs mt-1">{errors.appearance_date.message}</p>}
-                                            </div>
-
-                                            <div>
-                                                <Label htmlFor="appearance_time">Appearance Time</Label>
-                                                <Input id="appearance_time" type="time" {...register('appearance_time')} />
-                                            </div>
-
-                                            <div>
-                                                <Label htmlFor="rescheduled_date">Rescheduled Date</Label>
-                                                <Input
-                                                    id="rescheduled_date"
-                                                    type="date"
-                                                    {...register('rescheduled_date')}
-                                                    disabled={!formData.appearance_date}
-                                                />
-                                                {errors.rescheduled_date && <p className="text-red-500 text-xs mt-1">{errors.rescheduled_date.message}</p>}
-                                            </div>
-
-                                            <div className="flex items-center gap-2 pt-6">
-                                                <input
-                                                    type="checkbox"
-                                                    id="rescheduled_date_communicated"
-                                                    {...register('rescheduled_date_communicated')}
-                                                    disabled={!formData.rescheduled_date}
-                                                    className="w-4 h-4 accent-[var(--accent-primary)]"
-                                                />
-                                                <Label htmlFor="rescheduled_date_communicated" className="mb-0 cursor-pointer">
-                                                    Reschedule Communicated
-                                                </Label>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {stage.id === 'statement' && (
-                                        <div className="pt-4 space-y-4">
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div className="col-span-2">
-                                                    <Label htmlFor="statement_status">Statement Status</Label>
-                                                    <Select
-                                                        id="statement_status"
-                                                        value={watch('statement_status') || ''}
-                                                        onChange={(e) => setValue('statement_status', e.target.value)}
-                                                    >
-                                                        <option value="">Select status...</option>
-                                                        {options.statement_status ? options.statement_status.map((o: any) => (
-                                                            <option key={o.id} value={o.option_value}>{o.option_value}</option>
-                                                        )) : STATEMENT_STATUS_OPTIONS.map((o: string) => (
-                                                            <option key={o} value={o}>{o}</option>
-                                                        ))}
-                                                    </Select>
-                                                </div>
-
-                                                <div>
-                                                    <Label htmlFor="date_of_1st_statement">1st Statement Date</Label>
-                                                    <Input id="date_of_1st_statement" type="date" {...register('date_of_1st_statement')} />
-                                                    {errors.date_of_1st_statement && <p className="text-red-500 text-xs mt-1">{errors.date_of_1st_statement.message}</p>}
-                                                </div>
-
-                                                <div>
-                                                    <Label htmlFor="date_of_2nd_statement">2nd Statement Date</Label>
-                                                    <Input
-                                                        id="date_of_2nd_statement"
-                                                        type="date"
-                                                        {...register('date_of_2nd_statement')}
-                                                        disabled={!formData.date_of_1st_statement}
-                                                    />
-                                                </div>
-
-                                                <div>
-                                                    <Label htmlFor="date_of_3rd_statement">3rd Statement Date</Label>
-                                                    <Input
-                                                        id="date_of_3rd_statement"
-                                                        type="date"
-                                                        {...register('date_of_3rd_statement')}
-                                                        disabled={!formData.date_of_2nd_statement}
-                                                    />
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {stage.id === 'closure' && (
-                                        <div className="pt-4 space-y-4">
-                                            <div className="flex items-center gap-2">
-                                                <input
-                                                    type="checkbox"
-                                                    id="followup_required"
-                                                    {...register('followup_required')}
-                                                    className="w-4 h-4 accent-[var(--accent-primary)]"
-                                                />
-                                                <Label htmlFor="followup_required" className="mb-0 cursor-pointer">
-                                                    Follow-up Required
-                                                </Label>
-                                            </div>
-                                        </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="case_id" className="text-sm font-medium text-[var(--text-secondary)]">Case Ref <span className="text-red-500">*</span></Label>
+                                    {readOnly ? (
+                                        <ReadOnlyField value={cases.find(c => c.id === watch('case_id'))?.name || watch('case_id')} />
+                                    ) : (
+                                        <Select
+                                            id="case_id"
+                                            value={watch('case_id') || ''}
+                                            onChange={(e) => setValue('case_id', e.target.value)}
+                                            className="h-11 bg-[var(--surface)] border-[var(--border-subtle)]"
+                                        >
+                                            <option value="">Select...</option>
+                                            {cases.map((c: any) => (
+                                                <option key={c.id} value={c.id}>{c.name}</option>
+                                            ))}
+                                        </Select>
                                     )}
                                 </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="person_role" className="text-sm font-medium text-[var(--text-secondary)]">Role</Label>
+                                    {readOnly ? (
+                                        <ReadOnlyField value={watch('person_role')} />
+                                    ) : (
+                                        <Select
+                                            id="person_role"
+                                            value={watch('person_role') || ''}
+                                            onChange={(e) => setValue('person_role', e.target.value)}
+                                            className="h-11 bg-[var(--surface)] border-[var(--border-subtle)]"
+                                        >
+                                            {PERSON_ROLE_OPTIONS.map((o: string) => (
+                                                <option key={o} value={o}>{o}</option>
+                                            ))}
+                                        </Select>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4">
+                            <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] border-b border-[var(--border-subtle)]/50 pb-1">Contact Details</h4>
+                            <div className="grid gap-4">
+                                {readOnly ? (
+                                    <>
+                                        <div className="space-y-1">
+                                            <Label className="text-xs text-[var(--text-muted)]">Phone</Label>
+                                            <ReadOnlyField value={watch('contact_number')} />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <Label className="text-xs text-[var(--text-muted)]">Email</Label>
+                                            <ReadOnlyField value={watch('email')} />
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Input
+                                            {...register('contact_number')}
+                                            placeholder="Phone Number (+91...)"
+                                            className="h-11 bg-[var(--surface)] border-[var(--border-subtle)]"
+                                        />
+                                        <Input
+                                            {...register('email')}
+                                            placeholder="Email Address"
+                                            className="h-11 bg-[var(--surface)] border-[var(--border-subtle)]"
+                                        />
+                                    </>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label className="text-sm font-medium text-[var(--text-secondary)]">Priority</Label>
+                                {readOnly ? (
+                                    <ReadOnlyField value={watch('priority')} />
+                                ) : (
+                                    <Select
+                                        value={watch('priority') || 'Medium'}
+                                        onChange={(e) => setValue('priority', e.target.value)}
+                                        className="h-10 text-sm bg-[var(--surface)] border-[var(--border-subtle)]"
+                                    >
+                                        {PRIORITY_OPTIONS.map((o: string) => <option key={o} value={o}>{o}</option>)}
+                                    </Select>
+                                )}
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="text-sm font-medium text-[var(--text-secondary)]">Tone</Label>
+                                {readOnly ? (
+                                    <ReadOnlyField value={watch('tone')} />
+                                ) : (
+                                    <Select
+                                        value={watch('tone') || ''}
+                                        onChange={(e) => setValue('tone', e.target.value)}
+                                        className="h-10 text-sm bg-[var(--surface)] border-[var(--border-subtle)]/60 text-[var(--text-secondary)]"
+                                    >
+                                        <option value="">Default</option>
+                                        {TONE_OPTIONS.map((o: string) => <option key={o} value={o}>{o}</option>)}
+                                    </Select>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label className="text-sm font-medium text-[var(--text-secondary)]">Context / Notes</Label>
+                            {readOnly ? (
+                                <div className="p-3 text-sm text-[var(--text-primary)] rounded-lg bg-[var(--surface-sunken)] min-h-[5rem] whitespace-pre-wrap">
+                                    {watch('notes') || 'No notes available.'}
+                                </div>
+                            ) : (
+                                <textarea
+                                    {...register('notes')}
+                                    rows={4}
+                                    className="w-full p-3 text-sm rounded-lg bg-[var(--surface)] border border-[var(--border-subtle)] focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] resize-none transition-colors"
+                                    placeholder="Add any relevant background info..."
+                                />
                             )}
                         </div>
-                    );
-                })}
-            </div>
+                    </div>
+                </div>
 
-            {/* Footer Actions */}
-            <div className="px-6 py-4 border-t border-[var(--border-primary)] bg-[var(--bg-secondary)] flex justify-end gap-3">
-                <Button type="button" variant="secondary" onClick={onCancel}>
-                    Cancel
-                </Button>
-                <Button type="submit" disabled={isSubmitting}>
-                    {isSubmitting ? 'Saving...' : initialData?.id ? 'Update Summons' : 'Create Summons'}
-                </Button>
+                {/* Section: Timeline & Logistics (Span 12 on mobile, 6 on md, 4 on xl) */}
+                <div className="col-span-12 md:col-span-6 xl:col-span-4 flex flex-col gap-6">
+                    <div className="flex items-center gap-2 pb-2 border-b border-[var(--border)]">
+                        <Calendar size={20} className="text-indigo-500" />
+                        <h3 className="text-lg font-semibold text-[var(--text-primary)]">Timeline & Service</h3>
+                    </div>
+
+                    <div className="space-y-8">
+                        {/* Issue & Service */}
+                        <div className="space-y-4">
+                            <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] border-b border-[var(--border-subtle)]/50 pb-1">Issuance</h4>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-medium text-[var(--text-secondary)]">Issue Date</Label>
+                                    {readOnly ? (
+                                        <ReadOnlyField value={watch('issue_date')} />
+                                    ) : (
+                                        <Input type="date" {...register('issue_date')} className="h-11 bg-[var(--surface)] border-[var(--border-subtle)]" />
+                                    )}
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-medium text-[var(--text-secondary)]">Served Date</Label>
+                                    {readOnly ? (
+                                        <ReadOnlyField value={watch('served_date')} />
+                                    ) : (
+                                        <Input type="date" {...register('served_date')} className="h-11 bg-[var(--surface)] border-[var(--border-subtle)]" />
+                                    )}
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="text-sm font-medium text-[var(--text-secondary)]">Mode of Service</Label>
+                                {readOnly ? (
+                                    <div className="flex flex-wrap gap-2 py-2">
+                                        {modeOfServiceValue?.length ? modeOfServiceValue.map(m => (
+                                            <span key={m} className="px-2 py-1 text-xs bg-[var(--surface-raised)] border border-[var(--border-subtle)] rounded-full text-[var(--text-secondary)]">
+                                                {m}
+                                            </span>
+                                        )) : <span className="text-sm text-[var(--text-muted)]">-</span>}
+                                    </div>
+                                ) : (
+                                    <MultiSelect
+                                        options={MODE_OF_SERVICE_OPTIONS}
+                                        selected={modeOfServiceValue || []}
+                                        onChange={(val) => setValue('mode_of_service', val)}
+                                        placeholder="Select modes..."
+                                    />
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Appearance */}
+                        <div className="space-y-4">
+                            <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] border-b border-[var(--border-subtle)]/50 pb-1">Appearance</h4>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-medium text-[var(--text-secondary)]">Date</Label>
+                                    {readOnly ? (
+                                        <ReadOnlyField value={watch('appearance_date')} />
+                                    ) : (
+                                        <Input type="date" {...register('appearance_date')} className="h-11 bg-[var(--surface)] border-[var(--border-subtle)]" />
+                                    )}
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-medium text-[var(--text-secondary)]">Time</Label>
+                                    {readOnly ? (
+                                        <ReadOnlyField value={watch('appearance_time')} />
+                                    ) : (
+                                        <Input type="time" {...register('appearance_time')} className="h-11 bg-[var(--surface)] border-[var(--border-subtle)]" />
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Rescheduling */}
+                        <div className={`space-y-4 transition-all duration-200 ${!watchAppearanceDate && !readOnly ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
+                            <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] border-b border-[var(--border-subtle)]/50 pb-1">Rescheduling</h4>
+                            <div className="space-y-2">
+                                <Label className="text-sm font-medium text-[var(--text-secondary)]">New Date</Label>
+                                {readOnly ? (
+                                    <ReadOnlyField value={watch('rescheduled_date')} />
+                                ) : (
+                                    <Input type="date" {...register('rescheduled_date')} className="h-11 bg-[var(--surface)] border-[var(--border-subtle)]" />
+                                )}
+                            </div>
+                            <label className={"flex items-center gap-3 p-2 rounded-lg transition-colors " + (readOnly ? "" : "hover:bg-[var(--surface-sunken)] cursor-pointer")}>
+                                <input
+                                    type="checkbox"
+                                    {...register('rescheduled_date_communicated')}
+                                    disabled={readOnly}
+                                    className="w-4 h-4 rounded border-gray-300 text-[var(--primary)] focus:ring-[var(--primary)]"
+                                />
+                                <span className="text-sm text-[var(--text-secondary)]">Date communicated to client?</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Section: Outcome & Closure (Span 12 on mobile, 12 on md (full width row), 4 on xl) */}
+                <div className="col-span-12 md:col-span-12 xl:col-span-4 flex flex-col gap-6">
+                    <div className="flex items-center gap-2 pb-2 border-b border-[var(--border)]">
+                        <CheckCircle2 size={20} className="text-emerald-600" />
+                        <h3 className="text-lg font-semibold text-[var(--text-primary)]">Outcome & Closure</h3>
+                    </div>
+
+                    <div className="space-y-8">
+                        {/* Statements */}
+                        <div className="space-y-4">
+                            <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] border-b border-[var(--border-subtle)]/50 pb-1">Statements</h4>
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-3">
+                                    <span className="text-sm font-medium text-[var(--text-muted)] w-12">1st</span>
+                                    {readOnly ? (
+                                        <ReadOnlyField value={watch('date_of_1st_statement')} />
+                                    ) : (
+                                        <Input type="date" {...register('date_of_1st_statement')} className="h-11 flex-1 bg-[var(--surface)] border-[var(--border-subtle)]" />
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <span className="text-sm font-medium text-[var(--text-muted)] w-12">2nd</span>
+                                    {readOnly ? (
+                                        <ReadOnlyField value={watch('date_of_2nd_statement')} />
+                                    ) : (
+                                        <Input type="date" {...register('date_of_2nd_statement')} className="h-11 flex-1 bg-[var(--surface)] border-[var(--border-subtle)]" />
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <span className="text-sm font-medium text-[var(--text-muted)] w-12">3rd</span>
+                                    {readOnly ? (
+                                        <ReadOnlyField value={watch('date_of_3rd_statement')} />
+                                    ) : (
+                                        <Input type="date" {...register('date_of_3rd_statement')} className="h-11 flex-1 bg-[var(--surface)] border-[var(--border-subtle)]" />
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Status & Outcome */}
+                        <div className="space-y-4">
+                            <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] border-b border-[var(--border-subtle)]/50 pb-1">Result</h4>
+                            <div className="space-y-4">
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-medium text-[var(--text-secondary)]">Statement Status</Label>
+                                    {readOnly ? (
+                                        <ReadOnlyField value={watch('statement_status')} />
+                                    ) : (
+                                        <Select
+                                            value={watch('statement_status') || ''}
+                                            onChange={(e) => setValue('statement_status', e.target.value)}
+                                            className="h-11 bg-[var(--surface)] border-[var(--border-subtle)]"
+                                        >
+                                            <option value="">Select status...</option>
+                                            {STATEMENT_STATUS_OPTIONS.map((o: string) => <option key={o} value={o}>{o}</option>)}
+                                        </Select>
+                                    )}
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-medium text-[var(--text-secondary)]">Final Response</Label>
+                                    {readOnly ? (
+                                        <ReadOnlyField value={watch('summons_response')} />
+                                    ) : (
+                                        <Select
+                                            value={watch('summons_response') || ''}
+                                            onChange={(e) => setValue('summons_response', e.target.value)}
+                                            className="h-11 bg-[var(--surface)] border-[var(--border-subtle)]"
+                                        >
+                                            <option value="">Select result...</option>
+                                            {SUMMONS_RESPONSE_OPTIONS.map((o: string) => <option key={o} value={o}>{o}</option>)}
+                                        </Select>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] border-b border-[var(--border-subtle)]/50 pb-1">Tags</h4>
+                            {readOnly ? (
+                                <div className="flex flex-wrap gap-2 py-2">
+                                    {purposeValue?.length ? purposeValue.map(p => (
+                                        <span key={p} className="px-2 py-1 text-xs bg-[var(--surface-raised)] border border-[var(--border-subtle)] rounded-full text-[var(--text-secondary)]">
+                                            {p}
+                                        </span>
+                                    )) : <span className="text-sm text-[var(--text-muted)]">-</span>}
+                                </div>
+                            ) : (
+                                <MultiSelect
+                                    options={PURPOSE_OPTIONS}
+                                    selected={purposeValue || []}
+                                    onChange={(val) => setValue('purpose', val)}
+                                    placeholder="Select purpose..."
+                                />
+                            )}
+                        </div>
+
+                        <div className="pt-2">
+                            <label className={`flex items-start gap-3 p-3 rounded-lg ${readOnly ? '' : 'hover:bg-[var(--surface-sunken)] cursor-pointer'} transition-colors border border-transparent hover:border-[var(--border-subtle)]`}>
+                                <input
+                                    type="checkbox"
+                                    {...register('followup_required')}
+                                    disabled={readOnly}
+                                    className="mt-0.5 w-5 h-5 rounded border-gray-300 text-[var(--primary)] focus:ring-[var(--primary)]"
+                                />
+                                <div>
+                                    <span className="block text-sm font-medium text-[var(--text-primary)]">Follow-up Required</span>
+                                    <span className="block text-xs text-[var(--text-secondary)] mt-0.5">Flag this case for further review.</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
             </div>
         </form>
     );
-}
+});
 
 export default LifecycleSummonForm;

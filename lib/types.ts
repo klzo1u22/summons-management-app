@@ -177,3 +177,53 @@ export interface ActivityLog {
     description: string;
     created_at: string;
 }
+// ==========================================
+// AI CHAT INTERFACES
+// ==========================================
+export interface ChatMessage {
+    role: 'user' | 'assistant' | 'system' | 'model' | 'tool';
+    content: string;
+    tool_calls?: any[];
+    tool_call_id?: string;
+}
+
+export interface AIResponse {
+    action: 'create' | 'update' | 'delete' | 'search' | 'clarify' | 'info';
+    data?: Record<string, unknown>;
+    message: string;
+    requires_confirmation?: boolean;
+    summonId?: string;
+    options?: string[];
+    executed?: boolean;
+    searchResults?: Summons[];
+}
+
+// New minimal AI response format (for optimized architecture)
+export interface AIParsedIntent {
+    intent: 'create' | 'update' | 'delete' | 'search' | 'help' | 'answer' | 'unknown';
+    entities: {
+        person_name?: string;
+        case_id?: string;
+        issue_date?: string;
+        appearance_date?: string;
+        served_date?: string;
+        status?: string;
+        address?: string;
+        notes?: string;
+        query?: string;
+        summon_id?: string;
+        error?: string | number;
+        [key: string]: string | number | undefined;
+    };
+    raw_input?: string;
+}
+
+// Workflow state for server-side state machine
+export type WorkflowState =
+    | 'idle'
+    | 'awaiting_name'
+    | 'awaiting_case'
+    | 'awaiting_details'
+    | 'awaiting_confirmation'
+    | 'done';
+

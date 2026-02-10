@@ -37,13 +37,9 @@ export default function CaseDetailsPage() {
         }
     };
 
-    const handleInlineUpdate = async (id: string, field: string, value: any) => {
+    const handleInlineUpdate = async (id: string, updates: Partial<Summons>) => {
         try {
-            const updateData: Partial<Summons> = {};
-            if (field === 'person_name') updateData.person_name = value;
-            if (field === 'person_role') updateData.person_role = value;
-
-            await updateSummonsAction(id, updateData);
+            await updateSummonsAction(id, updates);
             await loadData();
         } catch (error) {
             console.error("Failed to update summons:", error);

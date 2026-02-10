@@ -21,6 +21,11 @@ function stringify(val: any) {
     return JSON.stringify(val);
 }
 
+// Helper to convert undefined to null for SQLite/LibSQL
+function toDBValue<T>(val: T): T | null {
+    return val === undefined ? null : val;
+}
+
 function mapSummons(row: any): Summons {
     return {
         ...row,
@@ -43,7 +48,8 @@ function mapSummons(row: any): Summons {
 export async function getAllSummonsFB(): Promise<Summons[]> {
     const rs = await db.execute('SELECT * FROM summons ORDER BY created_at DESC');
     const rows = rs.rows as any[];
-    return rows.map(mapSummons);
+    const result = rows.map(mapSummons);
+    return JSON.parse(JSON.stringify(result));
 }
 
 export async function getSummonByIdFB(id: string): Promise<Summons | null> {
@@ -53,7 +59,7 @@ export async function getSummonByIdFB(id: string): Promise<Summons | null> {
     });
     const row = rs.rows[0] as any;
     if (!row) return null;
-    return mapSummons(row);
+    return JSON.parse(JSON.stringify(mapSummons(row)));
 }
 
 export async function addSummonsFB(data: Summons): Promise<void> {
@@ -80,36 +86,36 @@ export async function addSummonsFB(data: Summons): Promise<void> {
     `;
 
     const args: any = {
-        id: data.id,
-        case_id: data.case_id,
-        person_name: data.person_name,
-        person_role: data.person_role,
-        contact_number: data.contact_number,
-        email: data.email,
-        priority: data.priority,
-        tone: data.tone,
+        id: toDBValue(data.id),
+        case_id: toDBValue(data.case_id),
+        person_name: toDBValue(data.person_name),
+        person_role: toDBValue(data.person_role),
+        contact_number: toDBValue(data.contact_number),
+        email: toDBValue(data.email),
+        priority: toDBValue(data.priority),
+        tone: toDBValue(data.tone),
         purpose: stringify(data.purpose),
-        notes: data.notes,
-        issue_date: data.issue_date,
-        served_date: data.served_date,
+        notes: toDBValue(data.notes),
+        issue_date: toDBValue(data.issue_date),
+        served_date: toDBValue(data.served_date),
         mode_of_service: stringify(data.mode_of_service),
-        appearance_date: data.appearance_date,
-        appearance_time: data.appearance_time,
-        rescheduled_date: data.rescheduled_date,
+        appearance_date: toDBValue(data.appearance_date),
+        appearance_time: toDBValue(data.appearance_time),
+        rescheduled_date: toDBValue(data.rescheduled_date),
         rescheduled_date_communicated: data.rescheduled_date_communicated ? 1 : 0,
-        statement_status: data.statement_status,
-        date_of_1st_statement: data.date_of_1st_statement,
-        date_of_2nd_statement: data.date_of_2nd_statement,
-        date_of_3rd_statement: data.date_of_3rd_statement,
+        statement_status: toDBValue(data.statement_status),
+        date_of_1st_statement: toDBValue(data.date_of_1st_statement),
+        date_of_2nd_statement: toDBValue(data.date_of_2nd_statement),
+        date_of_3rd_statement: toDBValue(data.date_of_3rd_statement),
         followup_required: data.followup_required ? 1 : 0,
-        summons_response: data.summons_response,
-        status: data.status,
+        summons_response: toDBValue(data.summons_response),
+        status: toDBValue(data.status),
         is_issued: data.is_issued ? 1 : 0,
         is_served: data.is_served ? 1 : 0,
         requests_reschedule: data.requests_reschedule ? 1 : 0,
         statement_ongoing: data.statement_ongoing ? 1 : 0,
         statement_recorded: data.statement_recorded ? 1 : 0,
-        previous_summon_id: data.previous_summon_id,
+        previous_summon_id: toDBValue(data.previous_summon_id),
         created_at: data.created_at || new Date().toISOString()
     };
 
@@ -145,6 +151,13 @@ export async function updateSummonsFB(id: string, data: Partial<Summons>): Promi
     if (args.rescheduled_date_communicated !== undefined) args.rescheduled_date_communicated = args.rescheduled_date_communicated ? 1 : 0;
     if (args.followup_required !== undefined) args.followup_required = args.followup_required ? 1 : 0;
 
+    // Sanitize all arg values to null if they are undefined
+    Object.keys(args).forEach(key => {
+        if (args[key] === undefined) {
+            args[key] = null;
+        }
+    });
+
     await db.execute({ sql, args });
 
     await logSummonsUpdatedFB(id, oldData, { ...oldData, ...data } as Summons);
@@ -152,10 +165,6 @@ export async function updateSummonsFB(id: string, data: Partial<Summons>): Promi
 
 export async function deleteSummonsFB(id: string): Promise<void> {
     const data = await getSummonByIdFB(id);
-    await db.execute({
-        sql: 'DELETE FROM summons WHERE id = ?',
-        args: [id]
-    });
 
     if (data?.person_name) {
         await logActivityFB({
@@ -164,6 +173,11 @@ export async function deleteSummonsFB(id: string): Promise<void> {
             description: `Summons for ${data.person_name} was deleted`
         });
     }
+
+    await db.execute({
+        sql: 'DELETE FROM summons WHERE id = ?',
+        args: [id]
+    });
 }
 
 // ==========================================
@@ -180,13 +194,14 @@ export async function getAllCasesFB() {
     `);
     const rows = rs.rows as any[];
 
-    return rows.map(c => ({
+    const result = rows.map(c => ({
         ...c,
         assigned_officer: parseJSON(c.assigned_officer),
         activity: parseJSON(c.activity),
         active: !!c.active,
         whether_pc_filed: !!c.whether_pc_filed
     }));
+    return JSON.parse(JSON.stringify(result));
 }
 
 export async function getCaseDetailsFB(id: string) {
@@ -203,7 +218,7 @@ export async function getCaseDetailsFB(id: string) {
     });
     const summonsRows = summonsRs.rows as any[];
 
-    return {
+    const result = {
         case: {
             ...caseRow,
             assigned_officer: parseJSON(caseRow.assigned_officer),
@@ -213,6 +228,7 @@ export async function getCaseDetailsFB(id: string) {
         },
         summons: summonsRows.map(mapSummons)
     };
+    return JSON.parse(JSON.stringify(result));
 }
 
 export async function addCaseFB(data: any): Promise<void> {
@@ -298,7 +314,7 @@ export async function getActivityLogsFB(summonsId: string) {
         sql: 'SELECT * FROM activity_logs WHERE summons_id = ? ORDER BY created_at DESC',
         args: [summonsId]
     });
-    return rs.rows as any[];
+    return JSON.parse(JSON.stringify(rs.rows));
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -376,7 +392,9 @@ export async function getRecentActivityFB() {
 
     const activities = [...(caseRs.rows as any[]), ...(summonsRs.rows as any[])];
 
-    return activities
+    const result = activities
         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
         .slice(0, 10);
+
+    return JSON.parse(JSON.stringify(result));
 }

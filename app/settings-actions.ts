@@ -34,10 +34,13 @@ export async function getOptionsAction(propertyName: string) {
             `,
             args: [propertyName]
         });
-        return rsFinal.rows as any[];
+        const finalRows = rsFinal.rows as any[];
+        // Ensure plain objects for Next.js serialization
+        return JSON.parse(JSON.stringify(finalRows));
     }
 
-    return rows;
+    // Ensure plain objects for Next.js serialization
+    return JSON.parse(JSON.stringify(rows));
 }
 
 export async function addOptionAction(propertyName: string, value: string) {

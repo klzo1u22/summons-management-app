@@ -8,6 +8,7 @@ import { Case } from "@/lib/types";
 import { Edit2, Eye, FileText, Search, Trash2, ChevronLeft, ChevronRight, X, Filter } from "lucide-react";
 import { useState, useMemo } from "react";
 import { Select } from "@/components/ui/Select";
+import { TableColumnHeader } from "../dashboard/TableColumnHeader";
 
 interface CasesTableProps {
     cases: Case[];
@@ -27,12 +28,16 @@ export function CasesTable({
     const [statusFilter, setStatusFilter] = useState("All");
     const [officerFilter, setOfficerFilter] = useState("All");
     const [currentPage, setCurrentPage] = useState(1);
+    const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | null }>({
+        key: '',
+        direction: null
+    });
 
     const pageSize = 10;
 
     // Derived Data (Filtering)
     const filteredCases = useMemo(() => {
-        return cases.filter(c => {
+        let result = cases.filter(c => {
             const matchesSearch =
                 c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                 c.ecir_no?.toLowerCase().includes(searchTerm.toLowerCase());
@@ -44,7 +49,34 @@ export function CasesTable({
 
             return matchesSearch && matchesStatus && matchesOfficer;
         });
-    }, [cases, searchTerm, statusFilter, officerFilter]);
+
+        // Apply Sort
+        if (sortConfig.key && sortConfig.direction) {
+            result.sort((a, b) => {
+                const aVal = a[sortConfig.key as keyof Case];
+                const bVal = b[sortConfig.key as keyof Case];
+
+                if (aVal === bVal) return 0;
+                if (aVal === null || aVal === undefined) return 1;
+                if (bVal === null || bVal === undefined) return -1;
+
+                if (typeof aVal === 'string' && typeof bVal === 'string') {
+                    return sortConfig.direction === 'asc'
+                        ? aVal.localeCompare(bVal)
+                        : bVal.localeCompare(aVal);
+                }
+
+                // Handle arrays (first element) or other types as strings
+                const strA = String(aVal);
+                const strB = String(bVal);
+                return sortConfig.direction === 'asc'
+                    ? strA.localeCompare(strB)
+                    : strB.localeCompare(strA);
+            });
+        }
+
+        return result;
+    }, [cases, searchTerm, statusFilter, officerFilter, sortConfig]);
 
     // Derived Data (Pagination)
     const totalPages = Math.ceil(filteredCases.length / pageSize);
@@ -58,6 +90,10 @@ export function CasesTable({
         if (newPage >= 1 && newPage <= totalPages) {
             setCurrentPage(newPage);
         }
+    };
+
+    const handleSort = (key: string, direction: 'asc' | 'desc' | null) => {
+        setSortConfig({ key, direction });
     };
 
     return (
@@ -117,11 +153,37 @@ export function CasesTable({
                     <table className="w-full text-sm text-left">
                         <thead className="bg-secondary/50 text-muted-foreground font-medium text-xs uppercase border-b border-border/50">
                             <tr>
-                                <th className="px-6 py-4 font-semibold tracking-wider">Case Details</th>
-                                <th className="px-6 py-4 font-semibold tracking-wider">Status</th>
+                                <th className="px-6 py-4 font-semibold tracking-wider">
+                                    <TableColumnHeader
+                                        title="Case Details"
+                                        columnKey="name"
+                                        sortable={true}
+                                        sortDirection={sortConfig.key === 'name' ? sortConfig.direction : null}
+                                        onSort={(dir) => handleSort('name', dir)}
+                                    />
+                                </th>
+                                <th className="px-6 py-4 font-semibold tracking-wider">
+                                    <TableColumnHeader
+                                        title="Status"
+                                        columnKey="status"
+                                        sortable={true}
+                                        sortDirection={sortConfig.key === 'status' ? sortConfig.direction : null}
+                                        onSort={(dir) => handleSort('status', dir)}
+                                    />
+                                </th>
                                 <th className="px-6 py-4 font-semibold tracking-wider">Key Stats</th>
                                 <th className="px-6 py-4 font-semibold tracking-wider">Assigned</th>
-                                <th className="px-6 py-4 font-semibold tracking-wider text-right">Last Update</th>
+                                <th className="px-6 py-4 font-semibold tracking-wider text-right">
+                                    <div className="flex justify-end">
+                                        <TableColumnHeader
+                                            title="Last Update"
+                                            columnKey="last_edited"
+                                            sortable={true}
+                                            sortDirection={sortConfig.key === 'last_edited' ? sortConfig.direction : null}
+                                            onSort={(dir) => handleSort('last_edited', dir)}
+                                        />
+                                    </div>
+                                </th>
                                 <th className="px-6 py-4 font-semibold tracking-wider text-right">Actions</th>
                             </tr>
                         </thead>

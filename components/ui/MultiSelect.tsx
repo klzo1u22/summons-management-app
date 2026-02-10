@@ -46,7 +46,7 @@ export function MultiSelect({
         <div className={cn("space-y-2 relative", className)} ref={containerRef}>
             {label && <Label className="text-[var(--text-secondary)]">{label}</Label>}
             <div
-                className="min-h-[42px] w-full bg-[var(--surface)] border border-[var(--border)] rounded-lg px-3 py-2 flex flex-wrap gap-2 cursor-pointer focus-within:border-[var(--primary)] transition-all shadow-sm hover:border-[var(--primary-muted)]"
+                className="min-h-[40px] w-full bg-[var(--surface)] border border-[var(--border)] rounded-md px-3 py-1.5 flex flex-wrap gap-2 cursor-pointer focus-within:ring-1 focus-within:ring-[var(--primary)] focus-within:border-[var(--primary)] transition-all shadow-sm hover:border-[var(--primary)]/50"
                 onClick={() => setIsOpen(!isOpen)}
             >
                 {selected.length === 0 ? (

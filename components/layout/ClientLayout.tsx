@@ -2,6 +2,7 @@
 
 import { useState, useEffect, createContext, useContext, ReactNode } from 'react';
 import { ThemeProvider } from '@/components/providers/ThemeProvider';
+import { ChatWidget } from '@/components/chat/ChatWidget';
 
 // App Context for global state
 interface AppContextType {
@@ -81,6 +82,7 @@ function AppLayout({ children }: { children: ReactNode }) {
     return (
         <div className="app-layout-full">
             {children}
+            <ChatWidget />
         </div>
     );
 }
